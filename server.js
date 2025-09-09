@@ -34,7 +34,7 @@ app.use(cors());
 
 
 const MEXC_LEADER_UIDS = '78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784'; // 
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 8080;
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 const FUTURES_TICKER_API = "https://futures.mexc.com/api/v1/contract/ticker"; // symbol: XRP_USDT
 const SPOT_TICKER_API = "https://api.mexc.com/api/v3/ticker/price";            // symbol: XRPUSDT
