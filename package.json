@@ -1,11 +1,9 @@
 {
   "name": "whale-futures",
   "version": "1.0.0",
-  "main": "server.js",
-  "type": "commonjs",
-  "engines": { "node": ">=18" },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "deploy": "wrangler deploy"
   },
   "keywords": [],
   "author": "Ken Nguyen - ntnpro@gmail.com",
