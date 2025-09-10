@@ -1,0 +1,141 @@
+// Cloudflare Pages Functions - /api/orders
+// GET /api/orders?uids=1,2,3&limit=10
+
+const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
+
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.mexc.com/",
+  "Origin": "https://www.mexc.com",
+  "Connection": "keep-alive",
+};
+
+const DEFAULT_UIDS = "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
+
+function toPair(symUnderscore = "") {
+  return symUnderscore.replace("_", "");
+}
+
+function modeFromPositionType(pt) {
+  if (pt === 1) return "long";
+  if (pt === 2) return "short";
+  return "unknown";
+}
+
+function marginModeFromOpenType(ot) {
+  if (ot === 1) return "Isolated";
+  if (ot === 2) return "Cross";
+  return "Unknown";
+}
+
+function notional(o) {
+  return Number(o.openAvgPrice || 0) * Number(o.amount || 0);
+}
+
+function marginPct(o) {
+  const m = Number(o.margin || 0);
+  const n = notional(o);
+  return n > 0 ? (m / n) * 100 : 0;
+}
+
+function normalizeAndCompute(rows) {
+  const TIMEZONE = "Asia/Ho_Chi_Minh";
+  const tsVNT = (t) =>
+    t
+      ? new Date(t)
+          .toLocaleString("en-GB", { timeZone: TIMEZONE, hour12: false })
+          .replace(",", "")
+      : "";
+
+  return rows
+    .map((o) => ({
+      id: o.orderId || o.id,
+      trader: o.traderNickName || "",
+      symbol: toPair(o.symbol),
+      mode: modeFromPositionType(o.positionType),
+      lev: o.leverage,
+      marginMode: marginModeFromOpenType(o.openType),
+      amount: o.amount,
+      openPrice: o.openAvgPrice,
+      margin: o.margin,
+      followers: o.followers,
+      openAt: o.openTime || 0,
+      openAtStr: tsVNT(o.openTime || 0),
+      closePrice: o.closeAvgPrice || 0,
+      notional: notional(o),
+      marginPct: marginPct(o),
+      raw: o,
+    }))
+    .sort((a, b) => b.openAt - a.openAt);
+}
+
+export async function onRequest(context) {
+  try {
+    const url = new URL(context.request.url);
+    const uidsStr = url.searchParams.get("uids") || DEFAULT_UIDS;
+    const limit = Number(url.searchParams.get("limit") || 10);
+    const uids = uidsStr
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const all = [];
+    // fetch tuần tự để tránh rate-limit; có thể Promise.all nếu bạn muốn nhanh hơn
+    for (const uid of uids) {
+      const q = new URL(API_ORDERS);
+      q.searchParams.set("limit", String(limit));
+      q.searchParams.set("orderListType", "ORDER");
+      q.searchParams.set("page", "1");
+      q.searchParams.set("uid", uid);
+
+      const resp = await fetch(q.toString(), {
+        headers: BROWSER_HEADERS,
+        cf: { cacheTtl: 10, cacheEverything: false },
+      });
+
+      if (!resp.ok) continue;
+
+      const data = await resp.json();
+      if (data?.success === true) {
+        const rows = data.data?.content || [];
+        all.push(...rows);
+      }
+    }
+
+    // de-dup theo orderId mới nhất
+    const byKey = new Map();
+    for (const o of all) {
+      const key = o.orderId || o.id;
+      const prev = byKey.get(key);
+      const pageTime = o.pageTime || o.openTime || 0;
+      if (!prev || pageTime > (prev.pageTime || prev.openTime || 0)) {
+        byKey.set(key, o);
+      }
+    }
+
+    const merged = Array.from(byKey.values());
+    const normalized = normalizeAndCompute(merged);
+
+    return new Response(JSON.stringify({ success: true, data: normalized }), {
+      headers: {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+      },
+    });
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ success: false, error: String(e?.message || e) }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+        },
+      }
+    );
+  }
+}
