@@ -128,13 +128,23 @@ ${csv}
   }
 };
 
+
 // --- helpers ---
-function jsonRes(status, obj) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
-    },
-  });
+function corsHeaders() {
+  return {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization",
+    // "access-control-max-age": "86400", // optional cache preflight
+  };
 }
+
+function jsonRes(status, obj) {
+  return new Response(JSON.stringify(obj), { status, headers: corsHeaders() });
+}
+
+// 👇 THÊM HANDLER OPTIONS để pass preflight
+export const onRequestOptions = async () => {
+  return new Response(null, { status: 204, headers: corsHeaders() });
+};
