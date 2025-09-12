@@ -22,7 +22,7 @@ export const onRequestPost = async (context) => {
     const ct = (request.headers.get("content-type") || "").toLowerCase();
     let bodyJson = {};
     if (ct.includes("application/json")) {
-      try { bodyJson = await request.json(); } catch {}
+      try { bodyJson = await request.json(); } catch { }
     }
     const customPrompt = (bodyJson?.prompt || "").toString().trim();
 
@@ -75,13 +75,25 @@ export const onRequestPost = async (context) => {
     const positionsAI = positionsRaw.map((p) => {
       const sym = getSymbolUnderscoreFromPosition(p);
       const marketPrice = sym ? (prices[sym] ?? null) : null;
-      return { ...p, marketPrice };
+
+      const rawSide = `${p.side || p.positionSide || p.direction || p.holdSide || ""}`.toUpperCase();
+      const direction = rawSide.includes("SHORT") ? "SHORT"
+        : rawSide.includes("SELL") ? "SHORT"
+          : "LONG";
+
+      return { ...p, marketPrice, direction };
     });
 
     const openOrdersAI = openOrdersRaw.map((o) => {
       const sym = getSymbolUnderscoreFromPosition(o);
       const marketPrice = sym ? (prices[sym] ?? null) : null;
-      return { ...o, marketPrice };
+
+      const rawSide = `${o.side || o.positionSide || o.direction || o.orderSide || o.tradeType || ""}`.toUpperCase();
+      const direction = rawSide.includes("SELL") ? "SHORT"
+        : rawSide.includes("SHORT") ? "SHORT"
+          : "LONG";
+
+      return { ...o, marketPrice, direction };
     });
 
     // Nếu không có lệnh → trả thẳng, không gọi OpenAI
@@ -329,7 +341,7 @@ async function priceForSymbol(symUnderscore) {
       const p = Number(obj?.lastPrice || obj?.fairPrice || obj?.indexPrice || 0);
       if (p > 0) return p;
     }
-  } catch {}
+  } catch { }
 
   // 2) Fallback spot
   try {
@@ -348,7 +360,7 @@ async function priceForSymbol(symUnderscore) {
         if (p > 0) return p;
       }
     }
-  } catch {}
+  } catch { }
 
   return 0;
 }
