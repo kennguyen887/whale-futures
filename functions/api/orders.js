@@ -16,6 +16,16 @@ const BROWSER_HEADERS = {
 
 const DEFAULT_UIDS = "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
 
+function corsHeaders() {
+  return {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,OPTIONS",
+    // 👇 thêm X-API-Key để preflight pass
+    "access-control-allow-headers": "Content-Type, X-API-Key",
+  };
+}
+
 function toPair(symUnderscore = "") {
   return symUnderscore.replace("_", "");
 }
@@ -47,8 +57,8 @@ function normalizeAndCompute(rows) {
   const tsVNT = (t) =>
     t
       ? new Date(t)
-          .toLocaleString("en-GB", { timeZone: TIMEZONE, hour12: false })
-          .replace(",", "")
+        .toLocaleString("en-GB", { timeZone: TIMEZONE, hour12: false })
+        .replace(",", "")
       : "";
 
   return rows
@@ -73,7 +83,21 @@ function normalizeAndCompute(rows) {
     .sort((a, b) => b.openAt - a.openAt);
 }
 
+export async function onRequestOptions() {
+  // preflight
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
+
 export async function onRequest(context) {
+  const { request, env } = context;
+  // -------- Simple API key check (shared key for all internal APIs) --------
+  const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
+  if (REQUIRED_KEY) {
+    const clientKey = request.headers.get("x-api-key") || "";
+    if (clientKey !== REQUIRED_KEY) {
+      return jsonRes(401, { success: false, error: "Unauthorized: invalid x-api-key." });
+    }
+  }
   try {
     const url = new URL(context.request.url);
     const uidsStr = url.searchParams.get("uids") || DEFAULT_UIDS;
@@ -84,7 +108,7 @@ export async function onRequest(context) {
       .filter(Boolean);
 
     const all = [];
-    // fetch tuần tự để tránh rate-limit; có thể Promise.all nếu bạn muốn nhanh hơn
+    // fetch tuần tự để tránh rate-limit
     for (const uid of uids) {
       const q = new URL(API_ORDERS);
       q.searchParams.set("limit", String(limit));
@@ -121,21 +145,12 @@ export async function onRequest(context) {
     const normalized = normalizeAndCompute(merged);
 
     return new Response(JSON.stringify({ success: true, data: normalized }), {
-      headers: {
-        "content-type": "application/json",
-        "access-control-allow-origin": "*",
-      },
+      headers: corsHeaders(),
     });
   } catch (e) {
     return new Response(
       JSON.stringify({ success: false, error: String(e?.message || e) }),
-      {
-        status: 500,
-        headers: {
-          "content-type": "application/json",
-          "access-control-allow-origin": "*",
-        },
-      }
+      { status: 500, headers: corsHeaders() }
     );
   }
 }

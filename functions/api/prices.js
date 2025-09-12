@@ -15,12 +15,22 @@ const BROWSER_HEADERS = {
   "Connection": "keep-alive",
 };
 
+function corsHeaders() {
+  return {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,OPTIONS",
+    // 👇 thêm X-API-Key để preflight pass
+    "access-control-allow-headers": "Content-Type, X-API-Key",
+  };
+}
+
 function toSpot(symUnderscore = "") {
   return symUnderscore.replace("_", ""); // XRP_USDT -> XRPUSDT
 }
 
 async function priceForSymbol(symUnderscore) {
-  // 1) thử Futures trước
+  // 1) Futures trước
   try {
     const q = new URL(FUTURES_TICKER_API);
     q.searchParams.set("symbol", symUnderscore);
@@ -31,9 +41,9 @@ async function priceForSymbol(symUnderscore) {
       const p = Number(obj?.lastPrice || obj?.fairPrice || obj?.indexPrice || 0);
       if (p > 0) return p;
     }
-  } catch {}
+  } catch { }
 
-  // 2) fallback sang Spot
+  // 2) Fallback spot
   try {
     const spotSym = toSpot(symUnderscore);
     const q = new URL(SPOT_TICKER_API);
@@ -50,12 +60,26 @@ async function priceForSymbol(symUnderscore) {
         if (p > 0) return p;
       }
     }
-  } catch {}
+  } catch { }
 
   return 0;
 }
 
+export async function onRequestOptions() {
+  // preflight
+  return new Response(null, { status: 204, headers: corsHeaders() });
+}
+
 export async function onRequest(context) {
+  const { request, env } = context;
+  // -------- Simple API key check (shared key for all internal APIs) --------
+  const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
+  if (REQUIRED_KEY) {
+    const clientKey = request.headers.get("x-api-key") || "";
+    if (clientKey !== REQUIRED_KEY) {
+      return jsonRes(401, { success: false, error: "Unauthorized: invalid x-api-key." });
+    }
+  }
   try {
     const url = new URL(context.request.url);
     const list = (url.searchParams.get("symbols") || "")
@@ -74,21 +98,12 @@ export async function onRequest(context) {
     }
 
     return new Response(JSON.stringify({ success: true, prices: out }), {
-      headers: {
-        "content-type": "application/json",
-        "access-control-allow-origin": "*",
-      },
+      headers: corsHeaders(),
     });
   } catch (e) {
     return new Response(
       JSON.stringify({ success: false, error: String(e?.message || e) }),
-      {
-        status: 500,
-        headers: {
-          "content-type": "application/json",
-          "access-control-allow-origin": "*",
-        },
-      }
+      { status: 500, headers: corsHeaders() }
     );
   }
 }
