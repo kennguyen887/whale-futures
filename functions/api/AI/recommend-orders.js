@@ -22,7 +22,7 @@ export const onRequestPost = async (context) => {
     const ct = (request.headers.get("content-type") || "").toLowerCase();
     let bodyJson = {};
     if (ct.includes("application/json")) {
-      try { bodyJson = await request.json(); } catch { }
+      try { bodyJson = await request.json(); } catch {}
     }
     const customPrompt = (bodyJson?.prompt || "").toString().trim();
 
@@ -55,7 +55,6 @@ export const onRequestPost = async (context) => {
       debug,
     });
 
-    // open_orders có thể thỉnh thoảng “Failed to fetch” → giữ vững quy trình
     const ordersResp = await safeMexcGet({
       path: "/api/v1/private/order/open_orders",
       params: {},
@@ -71,29 +70,27 @@ export const onRequestPost = async (context) => {
     // -------- Giá thị trường theo MEXC (futures → fallback spot) --------
     const prices = await fetchMarketPricesForPositions(positionsRaw);
 
-    // -------- Build JSON cho AI: GIỮ tất cả fields + thêm "marketPrice" --------
+    // -------- Build JSON cho AI: giữ full fields + marketPrice + direction + marginMode --------
     const positionsAI = positionsRaw.map((p) => {
       const sym = getSymbolUnderscoreFromPosition(p);
       const marketPrice = sym ? (prices[sym] ?? null) : null;
 
-      const rawSide = `${p.side || p.positionSide || p.direction || p.holdSide || ""}`.toUpperCase();
-      const direction = rawSide.includes("SHORT") ? "SHORT"
-        : rawSide.includes("SELL") ? "SHORT"
-          : "LONG";
+      // theo docs: positionType 1=long, 2=short
+      const direction = mapPositionType(p?.positionType, p?.side, p?.positionSide, p?.holdSide);
+      // theo docs: openType 1=isolated, 2=cross
+      const marginMode = mapOpenType(p?.openType, p?.marginMode, p?.margin_type, p?.isIsolated);
 
-      return { ...p, marketPrice, direction };
+      return { ...p, marketPrice, direction, marginMode };
     });
 
     const openOrdersAI = openOrdersRaw.map((o) => {
       const sym = getSymbolUnderscoreFromPosition(o);
       const marketPrice = sym ? (prices[sym] ?? null) : null;
 
-      const rawSide = `${o.side || o.positionSide || o.direction || o.orderSide || o.tradeType || ""}`.toUpperCase();
-      const direction = rawSide.includes("SELL") ? "SHORT"
-        : rawSide.includes("SHORT") ? "SHORT"
-          : "LONG";
+      const direction = mapPositionType(o?.positionType, o?.side, o?.positionSide, o?.orderSide);
+      const marginMode = mapOpenType(o?.openType, o?.marginMode, o?.margin_type, o?.isIsolated);
 
-      return { ...o, marketPrice, direction };
+      return { ...o, marketPrice, direction, marginMode };
     });
 
     // Nếu không có lệnh → trả thẳng, không gọi OpenAI
@@ -111,11 +108,11 @@ export const onRequestPost = async (context) => {
       });
     }
 
-    // -------- Prompt MỚI (JSON rõ nghĩa) --------
+    // -------- Prompt (JSON rõ nghĩa) --------
     const aiPayload = {
       timezone: "Asia/Ho_Chi_Minh",
       generatedAt: new Date().toISOString(),
-      notes: "marketPrice fetched from MEXC futures ticker, fallback to spot price if needed",
+      notes: "marketPrice from MEXC futures ticker, fallback to spot; direction/marginMode derived per MEXC docs (positionType, openType).",
       positions: positionsAI,
       openOrders: openOrdersAI
     };
@@ -222,7 +219,6 @@ async function hmacSha256Hex(key, msg) {
   return toHex(sig);
 }
 
-/** Core mexc GET with contract signing */
 async function mexcGet({ path, params, accessKey, secretKey, timeoutMs = 15000 }) {
   const requestParamString = buildRequestParamString(params || {});
   const reqTime = Date.now().toString(); // ms
@@ -267,8 +263,7 @@ async function safeMexcGet({ path, params, accessKey, secretKey, debug = [], opt
     } catch (e) {
       lastErr = e;
       debug.push({ ok: false, path, try: i, at: Date.now(), error: String(e?.message || e) });
-      // backoff nhẹ
-      await sleep(300 * i);
+      await sleep(300 * i); // backoff nhẹ
     }
   }
   if (optional) return null; // không phá flow nếu endpoint optional
@@ -341,7 +336,7 @@ async function priceForSymbol(symUnderscore) {
       const p = Number(obj?.lastPrice || obj?.fairPrice || obj?.indexPrice || 0);
       if (p > 0) return p;
     }
-  } catch { }
+  } catch {}
 
   // 2) Fallback spot
   try {
@@ -360,7 +355,7 @@ async function priceForSymbol(symUnderscore) {
         if (p > 0) return p;
       }
     }
-  } catch { }
+  } catch {}
 
   return 0;
 }
@@ -380,4 +375,32 @@ async function fetchMarketPricesForPositions(positions) {
     if (price > 0) out[sym] = price;
   }
   return out; // { "BTC_USDT": 62150.2, ... }
+}
+
+// --------- Mapping theo docs MEXC ---------
+function mapPositionType(positionType, ...fallbacks) {
+  const n = Number(positionType);
+  if (n === 1) return "LONG";
+  if (n === 2) return "SHORT";
+  // fallback nhẹ nếu API không trả positionType
+  for (const f of fallbacks) {
+    const s = String(f ?? "").toUpperCase();
+    if (s.includes("SHORT") || s.includes("SELL")) return "SHORT";
+    if (s.includes("LONG") || s.includes("BUY")) return "LONG";
+  }
+  return "LONG";
+}
+
+function mapOpenType(openType, ...fallbacks) {
+  const n = Number(openType);
+  if (n === 1) return "Isolated";
+  if (n === 2) return "Cross";
+  // fallback nếu không có openType
+  for (const f of fallbacks) {
+    if (typeof f === "boolean") return f ? "Isolated" : "Cross";
+    const s = String(f ?? "").toLowerCase();
+    if (s.includes("isolated")) return "Isolated";
+    if (s.includes("cross")) return "Cross";
+  }
+  return "Cross";
 }
