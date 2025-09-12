@@ -47,13 +47,12 @@ export const onRequestPost = async (context) => {
     // -------- One combined prompt (GUIDANCE + USER_TASK collapsed) --------
     const DEFAULT_COMBINED_PROMPT = `
 Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang có. Hãy:
-1) Đọc lệnh Futures bên dưới, tìm ra top 10 lệnh tốt nhất dựa tao kiến thức bạn có.
-2) Chuẩn hoá số, parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
-4) Phân loại kèo: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
-5) Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro cho từng lệnh
-7) Thêm cảnh báo ⚠️ nếu có
-8) Ngôn ngữ: ${lang === "vi" ? "Tiếng Việt" : "User language"}; xuất bảng: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
-9) Cho kết quả format các lệnh dạng table Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng.
+-  Dựa vào những gì bạn đang biết về tình hình thị trường này và dựa lệnh Futures bên dưới(bỏ qua amount, Margin, và Notional) tìm ra top 10 lệnh tốt nhất dựa vào kiến thức bạn có.
+-  Phân loại kèo: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
+-  Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro cho từng lệnh
+-  cho lời khuyên nên vào entry hay chưa, nếu có thì amount bao nhiêu, TP/SL ra sao
+-   Ngôn ngữ: ${lang === "vi" ? "Tiếng Việt" : "User language"}; xuất bảng: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
+-  Cho kết quả format các lệnh dạng table Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng.
 
 Lệnh Futures cần phân tích:
 ${csv || "<NO_CSV_PROVIDED>"}”
