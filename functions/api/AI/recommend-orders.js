@@ -1,5 +1,5 @@
 // /functions/AI/recommend-live.js
-// Route: POST /api/AI/recommend-live?topN=10&lang=vi
+// Route: POST /api/AI/recommend-live?lang=vi
 // Envs required: OPENAI_API_KEY, MEXC_ACCESS_KEY, MEXC_SECRET_KEY
 // Optional envs : OPENAI_BASE (default https://api.openai.com)
 //                 OPENAI_MODEL (default gpt-4o-mini)
@@ -101,13 +101,45 @@ export const onRequestPost = async (context) => {
     const positionsRaw = extractArray(posResp);
     const openOrdersRaw = extractArray(ordResp);
 
-    // -------- Giá thị trường theo MEXC (lấy như code get_prices.js) --------
+    // -------- Giá thị trường theo MEXC (futures → fallback spot) --------
     const prices = await fetchMarketPricesForPositions(positionsRaw);
 
-    // -------- CSV động từ positions + thêm cột Market Price --------
-    const positionsCsv = buildDynamicCsvWithMarket(positionsRaw, prices);
+    // -------- Build JSON cho AI: GIỮ tất cả fields + thêm "marketPrice" --------
+    const positionsAI = positionsRaw.map((p) => {
+      const sym = getSymbolUnderscoreFromPosition(p);
+      const marketPrice = sym ? (prices[sym] ?? null) : null;
+      return { ...p, marketPrice };
+    });
 
-    // -------- Prompt MỚI (theo yêu cầu) --------
+    const openOrdersAI = openOrdersRaw.map((o) => {
+      const sym = getSymbolUnderscoreFromPosition(o);
+      const marketPrice = sym ? (prices[sym] ?? null) : null;
+      return { ...o, marketPrice };
+    });
+
+    // Nếu không có lệnh → trả thẳng, không gọi OpenAI
+    if ((!positionsAI || positionsAI.length === 0) && (!openOrdersAI || openOrdersAI.length === 0)) {
+      return jsonRes(200, {
+        success: true,
+        model: OPENAI_MODEL,
+        resultMarkdown: "chưa có lệnh nào",
+        positionsCount: 0,
+        openOrdersCount: 0,
+        positionsRaw,
+        openOrdersRaw,
+        prices
+      });
+    }
+
+    // -------- Prompt MỚI (JSON rõ nghĩa) --------
+    const aiPayload = {
+      timezone: "Asia/Ho_Chi_Minh",
+      generatedAt: new Date().toISOString(),
+      notes: "marketPrice fetched from MEXC futures ticker, fallback to spot price if needed",
+      positions: positionsAI,
+      openOrders: openOrdersAI
+    };
+
     const DEFAULT_PROMPT = `
 Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang chạy. Hãy ouput lại các lệnh bên dưới dạng text dễ đọc, trình bày có icon, reaction chars, sắp xếp mức độ ưu tiên cao đến thấp, lấy giá coin này để phân tích kiểm tra rủi ro và PNLn,  Dữ liệu rõ ràng, và dự đoán những số liệu quan trọng, và thêm những column:
 -  Dựa vào những gì bạn đang biết về tình hình thị trường này, tư vấn cho tôi có gì sai hay có gì cần lưu ý không.
@@ -115,22 +147,10 @@ Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi �
 -  Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro cho từng lệnh
 
 Các lệnh Futures của tôi(nếu không có thì chỉ cần trả lời "chưa có lệnh nào"):
-${positionsCsv || "<EMPTY>"}
-`.trim();
 
-    // Nếu không có lệnh -> trả thẳng cho client (khỏi gọi OpenAI)
-    if (!positionsRaw || positionsRaw.length === 0) {
-      return jsonRes(200, {
-        success: true,
-        model: OPENAI_MODEL,
-        resultMarkdown: "chưa có lệnh nào",
-        positionsCount: 0,
-        openOrdersCount: openOrdersRaw.length || 0,
-        positionsRaw,
-        openOrdersRaw,
-        prices
-      });
-    }
+DỮ LIỆU JSON:
+${"```json\n" + JSON.stringify(aiPayload, null, 2) + "\n```"}
+`.trim();
 
     const finalPrompt = customPrompt || DEFAULT_PROMPT;
 
@@ -169,6 +189,7 @@ ${positionsCsv || "<EMPTY>"}
       resultMarkdown: content,
       positionsCount: positionsRaw.length,
       openOrdersCount: openOrdersRaw.length,
+      // Trả đủ dữ liệu để FE dùng/so sánh
       positionsRaw,
       openOrdersRaw,
       prices
@@ -179,21 +200,6 @@ ${positionsCsv || "<EMPTY>"}
 };
 
 // ---------------- helpers ----------------
-
-// lấy mảng từ {success:true,data:[...]} | {code:0,data:[...]} | {positions:[...]} | ...
-function extractArray(resp) {
-  const root = (resp && (resp.data ?? resp.result ?? resp)) ?? [];
-  if (Array.isArray(root)) return root;
-  if (Array.isArray(root.positions)) return root.positions;
-  if (Array.isArray(root.orders)) return root.orders;
-  if (root && typeof root === "object") {
-    for (const v of Object.values(root)) {
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
-}
-
 async function safeJson(res) {
   try { return await res.json(); } catch { return await res.text(); }
 }
@@ -232,24 +238,20 @@ function toSpot(symUnderscore = "") {
   return symUnderscore.replace("_", ""); // XRP_USDT -> XRPUSDT
 }
 
-// Lấy symbol chuẩn MEXC (BTC_USDT, ETH_USDT, ...)
 function getSymbolUnderscoreFromPosition(p) {
-  // Ưu tiên field chuẩn "symbol"
   const cands = [
     p?.symbol, p?.currency, p?.contract, p?.instrumentId, p?.instrument, p?.pair,
   ].filter(Boolean);
   for (const s of cands) {
-    // đa phần futures mexc dùng BTC_USDT, XRP_USDT
     if (typeof s === "string" && s.includes("_")) return s.toUpperCase();
   }
-  // Nếu không có underscore, mà là "BTCUSDT" -> thêm underscore (phỏng đoán)
   for (const s of cands) {
     if (typeof s === "string" && !s.includes("_") && /USDT$/i.test(s)) {
       const base = s.replace(/USDT$/i, "");
       if (base) return `${base.toUpperCase()}_USDT`;
     }
   }
-  return ""; // không xác định được
+  return "";
 }
 
 async function priceForSymbol(symUnderscore) {
@@ -289,7 +291,6 @@ async function priceForSymbol(symUnderscore) {
 }
 
 async function fetchMarketPricesForPositions(positions) {
-  // unique symbol list
   const set = new Set();
   for (const p of positions || []) {
     const s = getSymbolUnderscoreFromPosition(p);
@@ -299,49 +300,9 @@ async function fetchMarketPricesForPositions(positions) {
   const entries = await Promise.all(
     symbols.map(async (sym) => [sym, await priceForSymbol(sym)])
   );
-  // map
   const out = {};
   for (const [sym, price] of entries) {
     if (price > 0) out[sym] = price;
   }
   return out; // { "BTC_USDT": 62150.2, ... }
-}
-
-/** CSV động: union tất cả keys level-1 + thêm cột "Market Price" (từ prices map) */
-function buildDynamicCsvWithMarket(items, pricesMap = {}) {
-  if (!Array.isArray(items) || items.length === 0) return "";
-
-  // union keys
-  const keySet = new Set();
-  for (const it of items) {
-    if (it && typeof it === "object" && !Array.isArray(it)) {
-      Object.keys(it).forEach(k => keySet.add(k));
-    }
-  }
-  // header: thêm "Market Price" cuối bảng
-  const headers = Array.from(keySet);
-  if (!headers.includes("Market Price")) headers.push("Market Price");
-
-  const lines = [];
-  lines.push(headers.join(","));
-
-  for (const it of items) {
-    // tính market price theo symbol
-    const sym = getSymbolUnderscoreFromPosition(it);
-    const mkt = sym ? pricesMap[sym] ?? "" : "";
-
-    const row = headers.map(h => {
-      if (h === "Market Price") return mkt;
-      let v = it?.[h];
-      if (v === null || v === undefined) v = "";
-      if (typeof v === "object") {
-        try { v = JSON.stringify(v); } catch { v = String(v); }
-      }
-      return String(v).replace(/[\n\r]+/g, " ").replace(/,/g, " ");
-    }).join(",");
-
-    lines.push(row);
-  }
-
-  return lines.join("\n");
 }
