@@ -368,20 +368,16 @@ export const onRequestPost = async (context) => {
 
     // -------- Compose expert-trader prompt (condensed from your combined style) --------
     const DEFAULT_PROMPT = `
-Bạn là chuyên gia trader kiêm risk-manager. Hãy:
-1) Đọc CSV lệnh Futures (vị thế đang mở + lệnh đang chờ khớp) bên dưới.
+Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang có. Hãy:
+1) Đọc lệnh Futures (vị thế đang mở + lệnh đang chờ khớp) bên dưới.
 2) Chuẩn hoá số, parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
-3) Chấm điểm & gom nhóm theo Symbol; phát hiện xung đột LONG/SHORT cùng lúc.
 4) Phân loại kèo: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
-5) Cho từng kèo: Bias (LONG/SHORT) + Entry Zone (LONG: -0.3–0.7% dưới giá; SHORT: +0.3–0.7% trên giá)
-   + Lev khuyến nghị (Majors 5–10x; Alts trend 3–6x; Meme/vi mô 2–5x) + Term (Scalp/Swing/Breakout) + Risk
-   + TP/SL (Majors +1%/-1%; Alts +2%/-1.2%; Meme +3%/-1.5%) + R:R + Reason.
+5) Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro
 6) Quản trị rủi ro (cứng): Lev tối đa như trên; ≤3 kèo cùng lớp tài sản; risk per trade ≤1% tài khoản; tổng risk ≤5%.
-7) Thêm cảnh báo ⚠️ nếu có:
-   - Xung đột leader cùng Symbol (nêu ví dụ UID/trader).
-   - Lev quá cao (≥100x), Δ% mở rộng (≥5%), notional quá nhỏ, dữ liệu thiếu.
+7) Thêm cảnh báo ⚠️ nếu có
 8) Ngôn ngữ: ${lang === "vi" ? "Tiếng Việt" : "User language"}; xuất bảng: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
-CSV:
+9) Format các lệnh bên dưới dạng table Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng.
+lệnh Futures:
 ${csv || "<EMPTY>"}
 `.trim();
 

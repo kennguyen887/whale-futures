@@ -46,43 +46,17 @@ export const onRequestPost = async (context) => {
 
     // -------- One combined prompt (GUIDANCE + USER_TASK collapsed) --------
     const DEFAULT_COMBINED_PROMPT = `
-Bạn là chuyên gia trader kiêm risk manager. Hãy:
-1) Nhận dữ liệu CSV lệnh copy-trade nếu có (cột: Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Amount, Margin (USDT), Notional (USDT), Open At (VNT), Margin %, Followers, UID). Nếu KHÔNG có CSV: vẫn tạo **khung phân tích mẫu** và checklist cách cung cấp CSV hợp lệ.
-2) Chuẩn hóa số (bỏ dấu phẩy, chuyển %), parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
-3) Tính điểm cho mỗi lệnh:
-   - Momentum: Market vs Open (đẹp nhất ~ +1%).
-   - PNL & ROI dương.
-   - Notional lớn (ưu tiên >10k USDT).
-   - Followers cao.
-   - Phạt điểm nếu Lev>80x.
-4) Gom theo Symbol, lấy lệnh điểm cao nhất làm đại diện. Suy Bias:
-   - Market ≥ Open + PNL/ROI dương → nghiêng LONG.
-   - Market < Open + PNL âm → cân nhắc SHORT (scalp).
-5) Kiểm tra xung đột leader (cùng Symbol có người LONG và có người SHORT). Nếu có → thêm cảnh báo: ⚠️ **Xung đột hướng**: <SYMBOL> (nêu trader/UID tiêu biểu), gợi ý vùng giá (retest/pullback) hoặc tránh nếu R:R kém.
-6) Đề xuất ${Number.isFinite(topN) ? topN : 10} kèo tốt nhất, có icon & nhóm:
-   - 🔥 **Ưu tiên cần chú ý**: điểm cao nhất, động lượng đẹp, thanh khoản tốt.
-   - 🛡️ **An toàn**: majors, biến động vừa, R:R ≥ 1.5.
-   - ⚠️ **Rủi ro**: meme/vi mô, lev cao, Δ% lớn hoặc xung đột hướng.
-   - 📈 **Đang trend**: break/continuation rõ, SL chặt.
-7) Cho mỗi kèo: Icon + Symbol + Bias (LONG/SHORT) + Entry Zone (LONG: -0.3–0.7% dưới hiện tại; SHORT: +0.3–0.7% trên hiện tại) + Lev khuyến nghị:
-   * Majors (BTC, ETH, BNB, SOL, XRP, LINK, DOT, ADA): 5–10x
-   * Meme/vi mô (WIF, PEPE, DOGE, PENGU, MEW, FART, USELESS…): 2–5x
-   * Alts trend (SUI, MYX, LINEA, WLD, ANKR…): 3–6x
-   Term (|Δ%|<0.6%=Scalp; 0.6–2%=Swing; >2%=Breakout) + Risk (Cao nếu Lev≥100 hoặc |Δ%|≥5; Trung bình nếu Lev≥50 hoặc |Δ%|≥2; Thấp nếu dưới ngưỡng) + TP/SL theo lớp tài sản:
-   * Majors: TP +1%, SL −1%
-   * Meme/vi mô: TP +3%, SL −1.5%
-   * Alts trend: TP +2%, SL −1.2%
-   Tính R:R, ghi Reason (ROI/PNL dương, giá >/< open, khối lượng, v.v.)
-8) Xuất **bảng gọn có icon**: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
-9) Quản trị rủi ro: Không >10x (majors), >6x (alts trend), >5x (meme/vi mô). Không mở >3 kèo cùng lớp tài sản. Risk mỗi kèo ≤1% tài khoản, tổng vị thế mở ≤5%.
-10) Ngôn ngữ: ${lang === "vi" ? "tiếng Việt" : "ngôn ngữ người dùng yêu cầu"}, ngắn gọn, số liệu rõ.
+Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang có. Hãy:
+1) Đọc lệnh Futures bên dưới, tìm ra top 10 lệnh tốt nhất dựa tao kiến thức bạn có.
+2) Chuẩn hoá số, parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
+4) Phân loại kèo: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
+5) Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro cho từng lệnh
+7) Thêm cảnh báo ⚠️ nếu có
+8) Ngôn ngữ: ${lang === "vi" ? "Tiếng Việt" : "User language"}; xuất bảng: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
+9) Cho kết quả format các lệnh dạng table Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng.
 
-CSV (có thể để trống nếu không cung cấp):
-${csv || "<NO_CSV_PROVIDED>"}
-
-Nếu CSV trống:
-- Hiển thị 1 bảng **mẫu** với 2–3 hàng minh hoạ (giá trị giả định hợp lý) để người dùng thấy đúng định dạng đầu ra.
-- Thêm checklist ngắn: “Cần cung cấp CSV với các cột bắt buộc…”
+Lệnh Futures cần phân tích:
+${csv || "<NO_CSV_PROVIDED>"}”
 `.trim();
 
     // Allow custom prompt override (if provided in body)
