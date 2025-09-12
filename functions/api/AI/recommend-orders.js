@@ -108,7 +108,7 @@ export const onRequestPost = async (context) => {
 
     // -------- Prompt cho AI (dùng CSV động). Có thể dùng positionsRaw nếu bạn muốn JSON-to-JSON. --------
     const DEFAULT_PROMPT = `
-Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang chạy. Hãy ouput là table từ các lệnh bên dưới, dạng bảng Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng, và dự đoán những số liệu quan trọng, và thêm những column:
+Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang chạy. Hãy ouput lạicác lệnh bên dưới, sắp xếp mức độ ưu tiên cao đến thấp, lấy giá coin này để phân tích kiểm tra rủi ro và PNL, trình bày có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng, và dự đoán những số liệu quan trọng, và thêm những column:
 -  Dựa vào những gì bạn đang biết về tình hình thị trường này, tư vấn cho tôi có gì sai hay có gì cần lưu ý không.
 -  Phân loại lệnh: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
 -  Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro cho từng lệnh
