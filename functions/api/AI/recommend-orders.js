@@ -43,8 +43,7 @@ export const onRequestPost = async (context) => {
 
     // -------- Query params --------
     const url = new URL(request.url);
-    const topN = parseInt(url.searchParams.get("topN") || "10", 10);
-    const lang = (url.searchParams.get("lang") || "vi").toLowerCase(); // vi default
+    const lang = (url.searchParams.get("lang") || "vi").toLowerCase();
 
     // -------- MEXC helpers (Contract signing) --------
     const MEXC_BASE = "https://contract.mexc.com";
@@ -99,14 +98,16 @@ export const onRequestPost = async (context) => {
       mexcGet("/api/v1/private/order/open_orders", {}),
     ]);
 
-    // Lấy mảng "positions" đúng như backend trả (không sửa key, không rename)
-    const positionsRaw = extractArray(posResp);   // => array of objects, raw
-    const openOrdersRaw = extractArray(ordResp);  // vẫn raw cho đồng nhất
+    const positionsRaw = extractArray(posResp);
+    const openOrdersRaw = extractArray(ordResp);
 
-    // -------- CSV động từ positions (tự gom tất cả keys) --------
-    const positionsCsv = buildDynamicCsv(positionsRaw);
+    // -------- Giá thị trường theo MEXC (lấy như code get_prices.js) --------
+    const prices = await fetchMarketPricesForPositions(positionsRaw);
 
-    // -------- Prompt cho AI (dùng CSV động). Có thể dùng positionsRaw nếu bạn muốn JSON-to-JSON. --------
+    // -------- CSV động từ positions + thêm cột Market Price --------
+    const positionsCsv = buildDynamicCsvWithMarket(positionsRaw, prices);
+
+    // -------- Prompt MỚI (theo yêu cầu) --------
     const DEFAULT_PROMPT = `
 Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang chạy. Hãy ouput lại các lệnh bên dưới dạng text dễ đọc, trình bày có icon, reaction chars, sắp xếp mức độ ưu tiên cao đến thấp, lấy giá coin này để phân tích kiểm tra rủi ro và PNLn,  Dữ liệu rõ ràng, và dự đoán những số liệu quan trọng, và thêm những column:
 -  Dựa vào những gì bạn đang biết về tình hình thị trường này, tư vấn cho tôi có gì sai hay có gì cần lưu ý không.
@@ -116,6 +117,20 @@ Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi �
 Các lệnh Futures của tôi(nếu không có thì chỉ cần trả lời "chưa có lệnh nào"):
 ${positionsCsv || "<EMPTY>"}
 `.trim();
+
+    // Nếu không có lệnh -> trả thẳng cho client (khỏi gọi OpenAI)
+    if (!positionsRaw || positionsRaw.length === 0) {
+      return jsonRes(200, {
+        success: true,
+        model: OPENAI_MODEL,
+        resultMarkdown: "chưa có lệnh nào",
+        positionsCount: 0,
+        openOrdersCount: openOrdersRaw.length || 0,
+        positionsRaw,
+        openOrdersRaw,
+        prices
+      });
+    }
 
     const finalPrompt = customPrompt || DEFAULT_PROMPT;
 
@@ -139,9 +154,9 @@ ${positionsCsv || "<EMPTY>"}
       return jsonRes(aiResp.status, {
         success: false,
         error: `OpenAI error: ${errText}`,
-        // vẫn trả RAW để bạn debug/hiển thị UI
         positionsRaw,
         openOrdersRaw,
+        prices
       });
     }
 
@@ -154,9 +169,9 @@ ${positionsCsv || "<EMPTY>"}
       resultMarkdown: content,
       positionsCount: positionsRaw.length,
       openOrdersCount: openOrdersRaw.length,
-      // Trả đủ mọi field từ positions/openOrders
       positionsRaw,
       openOrdersRaw,
+      prices
     });
   } catch (e) {
     return jsonRes(500, { success: false, error: String(e?.message || e) });
@@ -164,6 +179,21 @@ ${positionsCsv || "<EMPTY>"}
 };
 
 // ---------------- helpers ----------------
+
+// lấy mảng từ {success:true,data:[...]} | {code:0,data:[...]} | {positions:[...]} | ...
+function extractArray(resp) {
+  const root = (resp && (resp.data ?? resp.result ?? resp)) ?? [];
+  if (Array.isArray(root)) return root;
+  if (Array.isArray(root.positions)) return root.positions;
+  if (Array.isArray(root.orders)) return root.orders;
+  if (root && typeof root === "object") {
+    for (const v of Object.values(root)) {
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return [];
+}
+
 async function safeJson(res) {
   try { return await res.json(); } catch { return await res.text(); }
 }
@@ -181,50 +211,137 @@ function jsonRes(status, obj) {
   return new Response(JSON.stringify(obj), { status, headers: corsHeaders() });
 }
 
-// Preflight
 export const onRequestOptions = async () => new Response(null, { status: 204, headers: corsHeaders() });
 
-/** Trích mảng từ response MEXC mà không mất field (ưu tiên data/result) */
-function extractArray(resp) {
-  const root = (resp && (resp.data ?? resp.result ?? resp)) ?? [];
-  if (Array.isArray(root)) return root;
-  if (Array.isArray(root.positions)) return root.positions; // một số API bọc trong { positions: [...] }
-  if (Array.isArray(root.orders)) return root.orders;
-  // Nếu không rõ, cố tìm mảng đầu tiên trong object:
-  if (root && typeof root === "object") {
-    for (const v of Object.values(root)) {
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
+// --------- MARKET PRICE (giống get_prices.js) ----------
+const FUTURES_TICKER_API = "https://futures.mexc.com/api/v1/contract/ticker";
+const SPOT_TICKER_API = "https://api.mexc.com/api/v3/ticker/price";
+
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.mexc.com/",
+  "Origin": "https://www.mexc.com",
+  "Connection": "keep-alive",
+};
+
+function toSpot(symUnderscore = "") {
+  return symUnderscore.replace("_", ""); // XRP_USDT -> XRPUSDT
 }
 
-/** Build CSV động: gom union tất cả keys (level 1) và fill theo từng item */
-function buildDynamicCsv(items) {
+// Lấy symbol chuẩn MEXC (BTC_USDT, ETH_USDT, ...)
+function getSymbolUnderscoreFromPosition(p) {
+  // Ưu tiên field chuẩn "symbol"
+  const cands = [
+    p?.symbol, p?.currency, p?.contract, p?.instrumentId, p?.instrument, p?.pair,
+  ].filter(Boolean);
+  for (const s of cands) {
+    // đa phần futures mexc dùng BTC_USDT, XRP_USDT
+    if (typeof s === "string" && s.includes("_")) return s.toUpperCase();
+  }
+  // Nếu không có underscore, mà là "BTCUSDT" -> thêm underscore (phỏng đoán)
+  for (const s of cands) {
+    if (typeof s === "string" && !s.includes("_") && /USDT$/i.test(s)) {
+      const base = s.replace(/USDT$/i, "");
+      if (base) return `${base.toUpperCase()}_USDT`;
+    }
+  }
+  return ""; // không xác định được
+}
+
+async function priceForSymbol(symUnderscore) {
+  // 1) Futures trước
+  try {
+    const q = new URL(FUTURES_TICKER_API);
+    q.searchParams.set("symbol", symUnderscore);
+    const r = await fetch(q.toString(), { headers: BROWSER_HEADERS });
+    if (r.ok) {
+      const json = await r.json();
+      const obj = Array.isArray(json?.data) ? json.data[0] : json?.data;
+      const p = Number(obj?.lastPrice || obj?.fairPrice || obj?.indexPrice || 0);
+      if (p > 0) return p;
+    }
+  } catch {}
+
+  // 2) Fallback spot
+  try {
+    const spotSym = toSpot(symUnderscore);
+    const q = new URL(SPOT_TICKER_API);
+    q.searchParams.set("symbol", spotSym);
+    const r = await fetch(q.toString(), { headers: BROWSER_HEADERS });
+    if (r.ok) {
+      const json = await r.json();
+      if (Array.isArray(json)) {
+        const f = json.find((x) => x.symbol === spotSym);
+        const p = Number(f?.price || 0);
+        if (p > 0) return p;
+      } else {
+        const p = Number(json?.price || 0);
+        if (p > 0) return p;
+      }
+    }
+  } catch {}
+
+  return 0;
+}
+
+async function fetchMarketPricesForPositions(positions) {
+  // unique symbol list
+  const set = new Set();
+  for (const p of positions || []) {
+    const s = getSymbolUnderscoreFromPosition(p);
+    if (s) set.add(s);
+  }
+  const symbols = [...set];
+  const entries = await Promise.all(
+    symbols.map(async (sym) => [sym, await priceForSymbol(sym)])
+  );
+  // map
+  const out = {};
+  for (const [sym, price] of entries) {
+    if (price > 0) out[sym] = price;
+  }
+  return out; // { "BTC_USDT": 62150.2, ... }
+}
+
+/** CSV động: union tất cả keys level-1 + thêm cột "Market Price" (từ prices map) */
+function buildDynamicCsvWithMarket(items, pricesMap = {}) {
   if (!Array.isArray(items) || items.length === 0) return "";
 
-  // union tất cả keys level-1
+  // union keys
   const keySet = new Set();
   for (const it of items) {
     if (it && typeof it === "object" && !Array.isArray(it)) {
       Object.keys(it).forEach(k => keySet.add(k));
     }
   }
+  // header: thêm "Market Price" cuối bảng
   const headers = Array.from(keySet);
-  // CSV
+  if (!headers.includes("Market Price")) headers.push("Market Price");
+
   const lines = [];
   lines.push(headers.join(","));
+
   for (const it of items) {
+    // tính market price theo symbol
+    const sym = getSymbolUnderscoreFromPosition(it);
+    const mkt = sym ? pricesMap[sym] ?? "" : "";
+
     const row = headers.map(h => {
+      if (h === "Market Price") return mkt;
       let v = it?.[h];
       if (v === null || v === undefined) v = "";
       if (typeof v === "object") {
         try { v = JSON.stringify(v); } catch { v = String(v); }
       }
-      // tránh phá CSV (đơn giản): bỏ dấu phẩy, xuống dòng
       return String(v).replace(/[\n\r]+/g, " ").replace(/,/g, " ");
     }).join(",");
+
     lines.push(row);
   }
+
   return lines.join("\n");
 }
