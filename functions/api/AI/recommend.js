@@ -141,4 +141,3 @@ function jsonRes(status, obj) {
 export const onRequestOptions = async () => {
   return new Response(null, { status: 204, headers: corsHeaders() });
 };
-s
