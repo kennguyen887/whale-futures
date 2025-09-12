@@ -2,26 +2,40 @@
 // Route: POST /api/AI/recommend
 // Requires env: OPENAI_API_KEY
 // Optional env: OPENAI_BASE (default https://api.openai.com), OPENAI_MODEL (default gpt-4o-mini)
+// Security (shared across APIs): env.INTERNAL_API_KEY (header x-api-key)
 
 export const onRequestPost = async (context) => {
   try {
     const { request, env } = context;
 
-    // -------- Read CSV from body (JSON {csv} or raw text/csv) --------
-    const ct = request.headers.get("content-type") || "";
+    // -------- Simple API key check (shared key for all internal APIs) --------
+    const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
+    if (REQUIRED_KEY) {
+      const clientKey = request.headers.get("x-api-key") || "";
+      if (clientKey !== REQUIRED_KEY) {
+        return jsonRes(401, { success: false, error: "Unauthorized: invalid x-api-key." });
+      }
+    }
+
+    // -------- Read CSV & optional custom prompt from body --------
+    const ct = (request.headers.get("content-type") || "").toLowerCase();
     let csv = "";
+    let customPrompt = ""; // optional override prompt from payload
+
     if (ct.includes("application/json")) {
       const j = await request.json();
       csv = (j?.csv || "").trim();
+      customPrompt = (j?.prompt || "").toString().trim();
     } else {
-      csv = (await request.text()).trim(); // accept text/csv or raw
+      // accept text/csv or raw text
+      csv = (await request.text()).trim();
     }
 
     if (!csv) {
-      return jsonRes(
-        400,
-        { success: false, error: "Missing CSV content in body. Send {\"csv\": \"...\"} or text/csv." }
-      );
+      return jsonRes(400, {
+        success: false,
+        error: 'Missing CSV content in body. Send {"csv":"..."} (JSON) or text/csv.',
+      });
     }
 
     // -------- OpenAI config --------
@@ -32,13 +46,13 @@ export const onRequestPost = async (context) => {
     const OPENAI_BASE = (env.OPENAI_BASE || "https://api.openai.com").replace(/\/+$/, "");
     const OPENAI_MODEL = env.OPENAI_MODEL || "gpt-4o-mini";
 
-    // Optional client tuning from query/body
+    // -------- Client tuning (query) --------
     const url = new URL(request.url);
     const topN = parseInt(url.searchParams.get("topN") || "10", 10);
-    const lang = (url.searchParams.get("lang") || "vi").toLowerCase(); // "vi" default
+    const lang = (url.searchParams.get("lang") || "vi").toLowerCase(); // vi default
 
-    // -------- System + User prompt (Vietnamese) --------
-    const GUIDANCE = `
+    // -------- Prompts --------
+    const DEFAULT_GUIDANCE = `
 Bạn là chuyên gia trader kiêm risk manager. Nhiệm vụ:
 1) Nhận CSV lệnh copy-trade (cột: Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Amount, Margin (USDT), Notional (USDT), Open At (VNT), Margin %, Followers, UID).
 2) Chuẩn hóa số (bỏ dấu phẩy, chuyển %), parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
@@ -80,10 +94,12 @@ Bạn là chuyên gia trader kiêm risk manager. Nhiệm vụ:
 10) Ngôn ngữ: tiếng Việt, ngắn gọn, số liệu rõ.
     `.trim();
 
+    const GUIDANCE = customPrompt || DEFAULT_GUIDANCE;
+
     const USER_TASK = `
 Dưới đây là CSV lệnh copy-trade. Hãy thực hiện đúng 10 yêu cầu trên.
-- Trả lời bằng tiếng Việt, ngắn gọn, có bảng gọn mục (8).
-- Ưu tiên 5–10 kèo tốt nhất (tham số topN hiện tại: ${Number.isFinite(topN) ? topN : 10}).
+- Trả lời bằng ${lang === "vi" ? "tiếng Việt" : "ngôn ngữ người dùng yêu cầu"}, ngắn gọn, có bảng gọn mục (8).
+- Ưu tiên ${Number.isFinite(topN) ? topN : 10} kèo tốt nhất.
 - Nếu có xung đột hướng theo (5), thêm cảnh báo phía trên bảng.
 - Khi chưa đủ dữ liệu một số cột, nêu rõ giả định.
 
@@ -104,7 +120,7 @@ ${csv}
     const aiResp = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -128,15 +144,14 @@ ${csv}
   }
 };
 
-
 // --- helpers ---
 function corsHeaders() {
   return {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "Content-Type, Authorization",
-    // "access-control-max-age": "86400", // optional cache preflight
+    // allow custom auth header + common headers
+    "access-control-allow-headers": "Content-Type, Authorization, X-API-Key",
   };
 }
 
@@ -144,7 +159,7 @@ function jsonRes(status, obj) {
   return new Response(JSON.stringify(obj), { status, headers: corsHeaders() });
 }
 
-// 👇 THÊM HANDLER OPTIONS để pass preflight
+// Preflight for CORS
 export const onRequestOptions = async () => {
   return new Response(null, { status: 204, headers: corsHeaders() });
 };
