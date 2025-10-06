@@ -244,7 +244,7 @@ export async function onRequest(context) {
     const targetSnapshotPrev = await readCache(TARGET_UID);
     const diffs = diffOrders(targetSnapshotPrev, targetSnapshotNow);
     const slackText = buildSlackMessage(TARGET_UID, diffs);
-    if (slackText) await postSlack(env, slackText);s
+    if (slackText) await postSlack(env, slackText);
     await writeCache(TARGET_UID, targetSnapshotNow);
 
     return new Response(JSON.stringify({ success: true, data: normalized }), {
@@ -257,4 +257,3 @@ export async function onRequest(context) {
     );
   }
 }
-
