@@ -110,11 +110,14 @@ async function writeState(uid, state){
   await caches.default.put(req, res);
 }
 
-// ---------- Diff (siêu gọn) ----------
+// ---------- Diff (thêm removed = tất toán) ----------
 function diffOrders(prev, curr){
   const prevMap = new Map(prev.map(p=>[String(p.id), p]));
+  const currMap = new Map(curr.map(c=>[String(c.id), c]));
+
   const added = [];
   const changed = [];
+  const removed = [];
 
   for (const c of curr){
     const p = prevMap.get(String(c.id));
@@ -127,12 +130,16 @@ function diffOrders(prev, curr){
     if (p.marginMode !== c.marginMode) ch.push(`marginMode ${p.marginMode}→${c.marginMode}`);
     if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
   }
-  return { added, changed };
+  for (const p of prev){
+    if (!currMap.has(String(p.id))) removed.push(p); // -> đã tất toán
+  }
+  return { added, changed, removed };
 }
 function fingerprintDiffs(d){
   const a = (d.added||[]).map(x=>String(x.id)).sort();
   const c = (d.changed||[]).map(x=>`${x.id}:${(x.changes||[]).join("|")}`).sort();
-  return a.join(",")+"#"+c.join(",");
+  const r = (d.removed||[]).map(x=>String(x.id)).sort();
+  return a.join(",")+"#"+c.join(",")+"#-"+r.join(",");
 }
 
 // ---------- Slack ----------
@@ -156,11 +163,22 @@ function buildSlack({ uid, diffs, traderName, totalMargin, title }){
   const changedLines = (diffs.changed||[]).slice(0,10).map(c =>
     `:arrows_counterclockwise:${fmtMode(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`
   );
-  if (!addedLines.length && !changedLines.length) return "";
+  const removedLines = (diffs.removed||[]).slice(0,10).map(r =>
+    `:white_check_mark:${fmtMode(r.mode)} \`${r.symbol}\` x${r.lev} • amount: *${fmt3(r.amount)}* • @ *${fmt3(r.openPrice)}* • ${fmtMarginType(r.marginMode)} • margin: *${fmt3(r.margin)} USDT* • ${r.openAtStr} VNT • *đã tất toán*`
+  );
+
+  if (!addedLines.length && !changedLines.length && !removedLines.length) return "";
 
   const headLeft = title || `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid})`;
   const headRight = `Tổng margin: *${fmt3(totalMargin||0)} USDT*`;
-  return `${headLeft} • ${headRight}\n${[...addedLines, ...changedLines].join("\n")}`;
+  const header = `${headLeft} • ${headRight}`;
+
+  const bodyLines = [];
+  if (addedLines.length) bodyLines.push(...addedLines);
+  if (changedLines.length) bodyLines.push(...changedLines);
+  if (removedLines.length) bodyLines.push(...removedLines);
+
+  return `${header}\n${bodyLines.join("\n")}`;
 }
 
 // ---------- Handlers ----------
@@ -182,7 +200,7 @@ export async function onRequest(context){
     const url = new URL(context.request.url);
     const targetUids = String(env.TARGET_UIDS || "").split(",").map(x=>(x||"").trim()).filter(Boolean);
 
-    // ---- TEST: preview từ cache, gộp vào 1 message, phân cách "-------------" ----
+    // ---- TEST: preview từ cache, gộp message, phân cách "-------------" ----
     if (url.searchParams.get("testNotification") === "true"){
       if (!targetUids.length){
         await postSlack(env, ":warning: [TEST] Không có TARGET_UIDS trong env để preview cache.");
@@ -194,7 +212,7 @@ export async function onRequest(context){
         const orders = (state.orders||[]).slice().sort((a,b)=>b.openAt-a.openAt);
         const traderName = orders.length ? (orders[0].trader||"") : "";
         const totalMargin = orders.reduce((s,o)=>s+safeNum(o.margin), 0);
-        const diffs = { added: orders.slice(0,10), changed: [] }; // preview coi như added
+        const diffs = { added: orders.slice(0,10), changed: [], removed: [] }; // preview coi như added
         const text = buildSlack({ uid, diffs, traderName, totalMargin, title: `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${uid})` }) || `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${uid}) • Tổng margin: *0 USDT*\n(cache trống)`;
         blocks.push(text);
       }
@@ -254,10 +272,13 @@ export async function onRequest(context){
 
       const diffs = diffOrders(state.orders || [], snapshotNow);
       const fp = fingerprintDiffs(diffs);
-      const hasContent = (diffs.added && diffs.added.length) || (diffs.changed && diffs.changed.length);
+      const hasContent =
+        (diffs.added && diffs.added.length) ||
+        (diffs.changed && diffs.changed.length) ||
+        (diffs.removed && diffs.removed.length);
 
       if (hasContent && fp !== state.lastFP){
-        const traderName = snapshotNow.length ? (snapshotNow[0].trader || "") : "";
+        const traderName = snapshotNow.length ? (snapshotNow[0].trader || "") : (state.orders[0]?.trader || "");
         const totalMargin = snapshotNow.reduce((s,o)=>s+safeNum(o.margin), 0);
         const text = buildSlack({ uid, diffs, traderName, totalMargin });
         if (text) blocks.push(text);
@@ -278,5 +299,3 @@ export async function onRequest(context){
     return new Response(JSON.stringify({ success:false, error: String(e && e.message ? e.message : e) }), { status:500, headers: corsHeaders() });
   }
 }
-
-export async function onRequestOptions(){ return new Response(null, { status: 204, headers: corsHeaders() }); }
