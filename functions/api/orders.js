@@ -98,45 +98,75 @@ function pickSnapshotFields(n) {
   };
 }
 
-function diffOrders(prev, curr) {
-  const prevMap = new Map(prev.map((p) => [p.id, p]));
-  const added = curr.filter((c) => !prevMap.has(c.id));
+/** -------- Persistent state in Cloudflare Cache (per UID) -------- */
+async function readState(uid) {
+  const req = new Request(`https://cache.local/orders/${uid}`);
+  const res = await caches.default.match(req);
+  if (!res) return { orders: [], maxOpenAt: 0, seenIds: [] };
+  try {
+    const data = await res.json();
+    return {
+      orders: Array.isArray(data.orders) ? data.orders : [],
+      maxOpenAt: Number(data.maxOpenAt || 0),
+      seenIds: Array.isArray(data.seenIds) ? data.seenIds : [],
+    };
+  } catch {
+    return { orders: [], maxOpenAt: 0, seenIds: [] };
+  }
+}
 
-  const changed = curr.reduce((acc, c) => {
-    const p = prevMap.get(c.id);
-    if (!p) return acc;
+async function writeState(uid, state) {
+  const req = new Request(`https://cache.local/orders/${uid}`);
+  const body = JSON.stringify({
+    orders: state.orders || [],
+    maxOpenAt: Number(state.maxOpenAt || 0),
+    seenIds: (state.seenIds || []).slice(-300), // cap để cache bền hơn
+  });
+  const res = new Response(body, { headers: { "content-type": "application/json" } });
+  await caches.default.put(req, res);
+}
+
+/** Diff with guard: avoid "new" spam by maxOpenAt & seenIds */
+function diffOrdersWithGuard(prevState, curr) {
+  const prev = prevState.orders || [];
+  const prevMap = new Map(prev.map((p) => [String(p.id), p]));
+  const seenIds = new Set((prevState.seenIds || []).map((x) => String(x)));
+  const maxOpenAtPrev = Number(prevState.maxOpenAt || 0);
+
+  // First-time bootstrap: don't send anything
+  if (!prev.length && !seenIds.size && maxOpenAtPrev === 0) {
+    return { added: [], changed: [] };
+  }
+
+  const added = [];
+  const changed = [];
+
+  for (const c of curr) {
+    const idKey = String(c.id);
+    const p = prevMap.get(idKey);
+
+    if (!p) {
+      // only report new if strictly newer than what we've seen
+      if (!seenIds.has(idKey) && Number(c.openAt || 0) > maxOpenAtPrev) {
+        added.push(c);
+      }
+      continue;
+    }
+
+    // detect changes
     const ch = [];
     if (p.lev !== c.lev) ch.push(`lev ${p.lev}→${c.lev}`);
     if (p.amount !== c.amount) ch.push(`amount ${p.amount}→${c.amount}`);
     if (p.openPrice !== c.openPrice) ch.push(`price ${p.openPrice}→${c.openPrice}`);
     if (p.mode !== c.mode) ch.push(`mode ${p.mode}→${c.mode}`);
     if (p.marginMode !== c.marginMode) ch.push(`marginMode ${p.marginMode}→${c.marginMode}`);
-    if (ch.length) acc.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
-    return acc;
-  }, []);
+    if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
+  }
 
   return { added, changed };
 }
 
-async function readCache(uid) {
-  const req = new Request(`https://cache.local/orders/${uid}`);
-  const res = await caches.default.match(req);
-  if (!res) return [];
-  try {
-    return await res.json();
-  } catch {
-    return [];
-  }
-}
-
-async function writeCache(uid, data) {
-  const req = new Request(`https://cache.local/orders/${uid}`);
-  const res = new Response(JSON.stringify(data), {
-    headers: { "content-type": "application/json" },
-  });
-  await caches.default.put(req, res);
-}
-
+/** Slack helpers */
 async function postSlack(env, text) {
   const token = env.SLACK_BOT_TOKEN || "";
   const channel = env.SLACK_CHANNEL_ID || "C09JWCT503Y";
@@ -151,39 +181,40 @@ async function postSlack(env, text) {
   });
 }
 
-/** Icons & pretty format for Slack */
 function buildSlackMessage(uid, diffs, traderName) {
+  // dùng shortcode icon để đồng nhất Slack
   const modeIcon = (mode) => {
-    if (mode === "long") return "📈 *Long*";
-    if (mode === "short") return "📉 *Short*";
+    if (mode === "long") return ":chart_with_upwards_trend: *Long*";
+    if (mode === "short") return ":chart_with_downwards_trend: *Short*";
     return "❓";
   };
   const marginIcon = (m) => {
-    if (m === "Isolated") return "🛡️ Isolated";
-    if (m === "Cross") return "🔗 Cross";
+    if (m === "Isolated") return ":shield: Isolated";
+    if (m === "Cross") return ":link: Cross";
     return m || "";
   };
 
   const addedLines = diffs.added.slice(0, 10).map(
     (a) =>
-      `🆕 ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
+      `:new: ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
         a.marginMode
-      )} • 🕒 ${a.openAtStr}` // 👉 luôn lấy openAtStr đã convert sang VNT
+      )} • :clock3: ${a.openAtStr}` // luôn VNT từ openAtStr
   );
 
   const changedLines = diffs.changed
     .slice(0, 10)
-    .map((c) => `♻️ ${modeIcon(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`);
+    .map((c) => `:arrows_counterclockwise: ${modeIcon(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`);
 
   if (!addedLines.length && !changedLines.length) return "";
 
-  const header = `👤 Trader *${traderName || "Unknown"}* (UID \`${uid}\`) có cập nhật lệnh:`;
+  const header = `:bust_in_silhouette: Trader *${traderName || "Unknown"}* (UID \`${uid}\`) có cập nhật lệnh:`;
   const sections = [];
   if (addedLines.length) sections.push(addedLines.join("\n"));
   if (changedLines.length) sections.push(changedLines.join("\n"));
   return `${header}\n${sections.join("\n")}`;
 }
 
+/** -------- Handlers -------- */
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -191,7 +222,7 @@ export async function onRequestOptions() {
 export async function onRequest(context) {
   const { request, env } = context;
 
-  // API key check (optional)
+  // Optional API key
   const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
   if (REQUIRED_KEY) {
     const clientKey = request.headers.get("x-api-key") || "";
@@ -206,10 +237,13 @@ export async function onRequest(context) {
   try {
     const url = new URL(context.request.url);
 
-    // Test Slack without fetching data
+    // Test Slack
     const testNotification = url.searchParams.get("testNotification");
     if (testNotification === "true") {
-      await postSlack(env, "✅ [TEST] Slack notification from `/api/orders`");
+      const nowVNT = new Date()
+        .toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false })
+        .replace(",", "");
+      await postSlack(env, `✅ [TEST] Slack notification from \`/api/orders\` at :clock3: ${nowVNT}`);
       return new Response(JSON.stringify({ success: true, message: "Test Slack sent" }), {
         headers: corsHeaders(),
       });
@@ -224,7 +258,7 @@ export async function onRequest(context) {
       .map((uidStr) => (uidStr || "").trim())
       .filter(Boolean);
 
-    // Target UIDs from env
+    // target UIDs from env (CSV)
     const targetUids = String(env.TARGET_UIDS || "")
       .split(",")
       .map((uidStr) => (uidStr || "").trim())
@@ -233,7 +267,7 @@ export async function onRequest(context) {
     const perUid = {};
     const all = [];
 
-    // Fetch per UID
+    // Fetch per UID (TTL ngắn để giảm rate-limit mà vẫn tươi)
     for (const uid of uids) {
       const q = new URL(API_ORDERS);
       q.searchParams.set("limit", String(limit));
@@ -255,7 +289,7 @@ export async function onRequest(context) {
       }
     }
 
-    // De-dup by latest pageTime/openTime
+    // De-dup theo id mới nhất
     const byKey = new Map();
     all.forEach((order) => {
       const key = order.orderId || order.id;
@@ -269,23 +303,36 @@ export async function onRequest(context) {
     const merged = Array.from(byKey.values());
     const normalized = normalizeAndCompute(merged);
 
-    // Notify per TARGET UID
+    // Check & notify per TARGET UID
     for (const target of targetUids) {
       const targetRowsRaw = perUid[target] || [];
       const targetNormalized = normalizeAndCompute(targetRowsRaw);
       const targetSnapshotNow = targetNormalized.map(pickSnapshotFields);
 
-      const targetSnapshotPrev = await readCache(target);
-      const diffs = diffOrders(targetSnapshotPrev, targetSnapshotNow);
+      const prevState = await readState(target);
+      const diffs = diffOrdersWithGuard(prevState, targetSnapshotNow);
 
-      // Lấy tên trader từ danh sách hiện tại (nếu có)
-      const traderName = targetNormalized.length > 0 ? targetNormalized[0].trader : "";
+      // Lấy tên trader (nếu có data)
+      const traderName = targetNormalized.length ? targetNormalized[0].trader : "";
 
       const slackText = buildSlackMessage(target, diffs, traderName);
       if (slackText) {
         await postSlack(env, slackText);
       }
-      await writeCache(target, targetSnapshotNow);
+
+      // Update state
+      const maxOpenAtNow = targetSnapshotNow.reduce(
+        (m, r) => Math.max(m, Number(r.openAt || 0)),
+        Number(prevState.maxOpenAt || 0)
+      );
+      const newSeen = new Set(prevState.seenIds || []);
+      for (const a of diffs.added) newSeen.add(String(a.id));
+
+      await writeState(target, {
+        orders: targetSnapshotNow,
+        maxOpenAt: maxOpenAtNow,
+        seenIds: Array.from(newSeen),
+      });
     }
 
     return new Response(JSON.stringify({ success: true, data: normalized }), {
