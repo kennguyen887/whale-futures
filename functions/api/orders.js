@@ -1,5 +1,6 @@
 // Cloudflare Pages Functions - /api/orders
 // GET /api/orders?uids=1,2,3&limit=10
+// Test Slack: GET /api/orders?testNotification=true
 
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
@@ -14,7 +15,8 @@ const BROWSER_HEADERS = {
   "Connection": "keep-alive",
 };
 
-const DEFAULT_UIDS = "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
+const DEFAULT_UIDS =
+  "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
 
 function corsHeaders() {
   return {
@@ -26,7 +28,7 @@ function corsHeaders() {
 }
 
 function toPair(symUnderscore = "") {
-  return symUnderscore.replace("_", "");
+  return String(symUnderscore).replace("_", "");
 }
 
 function modeFromPositionType(pt) {
@@ -41,17 +43,16 @@ function marginModeFromOpenType(ot) {
   return "Unknown";
 }
 
-function notional(o) {
-  return Number(o.openAvgPrice || 0) * Number(o.amount || 0);
+function notional(order) {
+  return Number(order.openAvgPrice || 0) * Number(order.amount || 0);
 }
 
-function marginPct(o) {
-  const m = Number(o.margin || 0);
-  const n = notional(o);
+function marginPct(order) {
+  const m = Number(order.margin || 0);
+  const n = notional(order);
   return n > 0 ? (m / n) * 100 : 0;
 }
 
-/** @param {Array<object>} rows */
 function normalizeAndCompute(rows) {
   const TIMEZONE = "Asia/Ho_Chi_Minh";
   const tsVNT = (t) =>
@@ -97,26 +98,22 @@ function pickSnapshotFields(n) {
   };
 }
 
-/**
- * @param {Array<object>} prev
- * @param {Array<object>} curr
- */
 function diffOrders(prev, curr) {
   const prevMap = new Map(prev.map((p) => [p.id, p]));
   const added = curr.filter((c) => !prevMap.has(c.id));
 
-  const changed = [];
-  curr.forEach((c) => {
+  const changed = curr.reduce((acc, c) => {
     const p = prevMap.get(c.id);
-    if (!p) return;
+    if (!p) return acc;
     const ch = [];
     if (p.lev !== c.lev) ch.push(`lev ${p.lev}→${c.lev}`);
     if (p.amount !== c.amount) ch.push(`amount ${p.amount}→${c.amount}`);
     if (p.openPrice !== c.openPrice) ch.push(`price ${p.openPrice}→${c.openPrice}`);
     if (p.mode !== c.mode) ch.push(`mode ${p.mode}→${c.mode}`);
     if (p.marginMode !== c.marginMode) ch.push(`marginMode ${p.marginMode}→${c.marginMode}`);
-    if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
-  });
+    if (ch.length) acc.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
+    return acc;
+  }, []);
 
   return { added, changed };
 }
@@ -140,11 +137,10 @@ async function writeCache(uid, data) {
   await caches.default.put(req, res);
 }
 
-/** @param {any} env */
 async function postSlack(env, text) {
   const token = env.SLACK_BOT_TOKEN || "";
   const channel = env.SLACK_CHANNEL_ID || "C09JWCT503Y";
-  if (!token) return;
+  if (!token || !channel || !text) return;
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
@@ -156,30 +152,31 @@ async function postSlack(env, text) {
 }
 
 function buildSlackMessage(uid, diffs) {
-  const addLines = diffs.added.slice(0, 10).map(
-    (a) => `• New ${a.symbol} ${a.mode} x${a.lev} amount ${a.amount} @ ${a.openPrice} (${a.openAtStr})`
+  const addedLines = diffs.added.slice(0, 10).map(
+    (a) =>
+      `• New ${a.symbol} ${a.mode} x${a.lev} amount ${a.amount} @ ${a.openPrice} (${a.openAtStr})`
   );
-  const chLines = diffs.changed.slice(0, 10).map(
-    (c) => `• ${c.symbol} ${c.mode} ${c.changes.join(", ")}`
-  );
-  const head = `UID ${uid} có thay đổi lệnh`;
-  if (!addLines.length && !chLines.length) return "";
+  const changedLines = diffs.changed
+    .slice(0, 10)
+    .map((c) => `• ${c.symbol} ${c.mode} ${c.changes.join(", ")}`);
+
+  if (!addedLines.length && !changedLines.length) return "";
+  const header = `UID ${uid} có thay đổi lệnh`;
   const parts = [];
-  if (addLines.length) parts.push(`Lệnh mới:\n${addLines.join("\n")}`);
-  if (chLines.length) parts.push(`Cập nhật:\n${chLines.join("\n")}`);
-  return `${head}\n${parts.join("\n\n")}`;
+  if (addedLines.length) parts.push(`Lệnh mới:\n${addedLines.join("\n")}`);
+  if (changedLines.length) parts.push(`Cập nhật:\n${changedLines.join("\n")}`);
+  return `${header}\n${parts.join("\n\n")}`;
 }
 
 export async function onRequestOptions() {
-  // preflight
+  // Preflight
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
-/** Cloudflare Pages Function handler (JS) */
 export async function onRequest(context) {
   const { request, env } = context;
 
-  // -------- Simple API key check (shared key for all internal APIs) --------
+  // -------- Simple API key check --------
   const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
   if (REQUIRED_KEY) {
     const clientKey = request.headers.get("x-api-key") || "";
@@ -193,14 +190,35 @@ export async function onRequest(context) {
 
   try {
     const url = new URL(context.request.url);
+
+    // ✅ Test Slack ngay, không cần fetch data
+    const testNotification = url.searchParams.get("testNotification");
+    if (testNotification === "true") {
+      await postSlack(env, "✅ [TEST] Slack notification from /api/orders");
+      return new Response(JSON.stringify({ success: true, message: "Test Slack sent" }), {
+        headers: corsHeaders(),
+      });
+    }
+
     const uidsStr = url.searchParams.get("uids") || DEFAULT_UIDS;
     const limit = Number(url.searchParams.get("limit") || 10);
-    const uids = uidsStr.split(",").map((s) => s.trim()).filter(Boolean);
 
-    const TARGET_UID = "22247145";
+    // Parse uids an toàn, tránh lỗi "s is not defined"
+    const uids = String(uidsStr || "")
+      .split(",")
+      .map((uidStr) => (uidStr || "").trim())
+      .filter(Boolean);
+
+    // Lấy list TARGET_UIDs từ env (dạng "22247145,34988691")
+    const targetUids = String(env.TARGET_UIDS || "")
+      .split(",")
+      .map((uidStr) => (uidStr || "").trim())
+      .filter(Boolean);
+
     const perUid = {};
     const all = [];
 
+    // Fetch theo từng uid (giảm rate-limit bằng TTL ngắn)
     for (const uid of uids) {
       const q = new URL(API_ORDERS);
       q.searchParams.set("limit", String(limit));
@@ -216,43 +234,51 @@ export async function onRequest(context) {
 
       const data = await resp.json();
       if (data && data.success === true) {
-        const rows = (data.data && data.data.content ? data.data.content : []).map((r) => ({
-          ...r,
-          _uid: uid,
-        }));
+        const rows = (data.data?.content || []).map((r) => ({ ...r, _uid: uid }));
         perUid[uid] = rows;
         all.push(...rows);
       }
     }
 
-    // de-dup theo orderId mới nhất
+    // De-dup theo orderId mới nhất
     const byKey = new Map();
-    all.forEach((o) => {
-      const key = o.orderId || o.id;
+    all.forEach((order) => {
+      const key = order.orderId || order.id;
       const prev = byKey.get(key);
-      const pageTime = o.pageTime || o.openTime || 0;
-      if (!prev || pageTime > (prev.pageTime || prev.openTime || 0)) byKey.set(key, o);
+      const pageTime = order.pageTime || order.openTime || 0;
+      if (!prev || pageTime > (prev.pageTime || prev.openTime || 0)) {
+        byKey.set(key, order);
+      }
     });
 
     const merged = Array.from(byKey.values());
     const normalized = normalizeAndCompute(merged);
 
-    // So sánh & báo Slack cho UID 22247145
-    const targetRowsRaw = perUid[TARGET_UID] || [];
-    const targetNormalized = normalizeAndCompute(targetRowsRaw);
-    const targetSnapshotNow = targetNormalized.map(pickSnapshotFields);
-    const targetSnapshotPrev = await readCache(TARGET_UID);
-    const diffs = diffOrders(targetSnapshotPrev, targetSnapshotNow);
-    const slackText = buildSlackMessage(TARGET_UID, diffs);
-    if (slackText) await postSlack(env, slackText);
-    await writeCache(TARGET_UID, targetSnapshotNow);
+    // So sánh & báo Slack cho từng TARGET_UID
+    for (const target of targetUids) {
+      const targetRowsRaw = perUid[target] || [];
+      const targetNormalized = normalizeAndCompute(targetRowsRaw);
+      const targetSnapshotNow = targetNormalized.map(pickSnapshotFields);
+
+      const targetSnapshotPrev = await readCache(target);
+      const diffs = diffOrders(targetSnapshotPrev, targetSnapshotNow);
+      const slackText = buildSlackMessage(target, diffs);
+
+      if (slackText) {
+        await postSlack(env, slackText);
+      }
+      await writeCache(target, targetSnapshotNow);
+    }
 
     return new Response(JSON.stringify({ success: true, data: normalized }), {
       headers: corsHeaders(),
     });
   } catch (e) {
     return new Response(
-      JSON.stringify({ success: false, error: String(e && e.message ? e.message : e) }),
+      JSON.stringify({
+        success: false,
+        error: String(e && e.message ? e.message : e),
+      }),
       { status: 500, headers: corsHeaders() }
     );
   }
