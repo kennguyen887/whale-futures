@@ -47,19 +47,20 @@ function tsVNT(t){
   return t ? new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false }).replace(",", "") : "";
 }
 
-// ---------- Normalize (đã thêm followers + uid) ----------
+// ---------- Normalize ----------
 function normalizeAndCompute(rows){
   return rows.map((o)=>{
     const lev = leverageOf(o);
     const openPrice = safeNum(o.openAvgPrice);
     const amount = safeNum(o.amount);
     const margin = marginUSDT(openPrice, amount, lev, o.margin);
+    // lấy UID đúng từ API nếu có, nếu không có thì từ _uid gắn lúc fetch
+    const traderUid = String(o.uid ?? o.traderUid ?? o._uid ?? "");
 
     return {
       id: o.orderId || o.id,
-      uid: String(o._uid ?? o.uid ?? ""),                 // <--- uid giữ nguyên sau de-dup
       trader: o.traderNickName || "",
-      followers: safeNum(o.followers),                    // <--- followers
+      traderUid,                        // <<<< NEW: luôn có trong response chuẩn hóa
       symbol: toPair(o.symbol),
       mode: modeFromPositionType(o.positionType),
       lev,
@@ -75,9 +76,8 @@ function normalizeAndCompute(rows){
 function pickSnapshotFields(n){
   return {
     id: n.id,
-    uid: n.uid || "",
     trader: n.trader || "",
-    followers: safeNum(n.followers || 0),
+    traderUid: String(n.traderUid || ""),  // <<<< giữ trong snapshot để dùng cho Slack header/preview
     symbol: n.symbol,
     mode: n.mode,
     lev: safeNum(n.lev),
@@ -90,20 +90,21 @@ function pickSnapshotFields(n){
   };
 }
 
-// ---------- State (Cache API, gọn nhẹ) ----------
+// ---------- State (Cache API, đơn giản) ----------
 async function readState(uid){
   const req = new Request(`https://cache.local/orders/${uid}`);
   const res = await caches.default.match(req);
-  if (!res) return { orders: [], lastFP: "", bootstrapped: false };
+  if (!res) return { orders: [], lastFP: "", bootstrapped: false, pendingEmpty: false };
   try {
     const d = await res.json();
     return {
       orders: Array.isArray(d.orders) ? d.orders : [],
       lastFP: d.lastFP || "",
       bootstrapped: Boolean(d.bootstrapped),
+      pendingEmpty: Boolean(d.pendingEmpty),
     };
   } catch {
-    return { orders: [], lastFP: "", bootstrapped: false };
+    return { orders: [], lastFP: "", bootstrapped: false, pendingEmpty: false };
   }
 }
 async function writeState(uid, state){
@@ -112,16 +113,20 @@ async function writeState(uid, state){
     orders: state.orders || [],
     lastFP: state.lastFP || "",
     bootstrapped: Boolean(state.bootstrapped),
+    pendingEmpty: Boolean(state.pendingEmpty),
   };
   const res = new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" }});
   await caches.default.put(req, res);
 }
 
-// ---------- Diff (ONLY added & changed) ----------
+// ---------- Diff (thêm removed) ----------
 function diffOrders(prev, curr){
   const prevMap = new Map(prev.map(p=>[String(p.id), p]));
+  const currMap = new Map(curr.map(c=>[String(c.id), c]));
   const added = [];
   const changed = [];
+  const removed = [];
+
   for (const c of curr){
     const p = prevMap.get(String(c.id));
     if (!p){ added.push(c); continue; }
@@ -133,12 +138,16 @@ function diffOrders(prev, curr){
     if (p.marginMode !== c.marginMode) ch.push(`marginMode ${p.marginMode}→${c.marginMode}`);
     if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
   }
-  return { added, changed };
+  for (const p of prev){
+    if (!currMap.has(String(p.id))) removed.push(p);
+  }
+  return { added, changed, removed };
 }
 function fingerprintDiffs(d){
   const a = (d.added||[]).map(x=>String(x.id)).sort();
   const c = (d.changed||[]).map(x=>`${x.id}:${(x.changes||[]).join("|")}`).sort();
-  return a.join(",")+"#"+c.join(",");
+  const r = (d.removed||[]).map(x=>String(x.id)).sort();
+  return a.join(",")+"#"+c.join(",")+"#-"+r.join(",");
 }
 
 // ---------- Slack ----------
@@ -154,7 +163,6 @@ async function postSlack(env, text){
 }
 function fmtMode(mode){ if(mode==="long")return" *Long*"; if(mode==="short")return" *Short*"; return "❓"; }
 function fmtMarginType(m){ if(m==="Isolated")return":shield: Isolated"; if(m==="Cross")return":link: Cross"; return m||""; }
-
 function buildSlack({ uid, diffs, traderName, totalMargin, title }){
   const addedLines = (diffs.added||[]).slice(0,10).map(a =>
     `:new:${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${fmt3(a.amount)}* • @ *${fmt3(a.openPrice)}* • ${fmtMarginType(a.marginMode)} • margin: *${fmt3(a.margin)} USDT* • ${a.openAtStr} VNT`
@@ -162,18 +170,18 @@ function buildSlack({ uid, diffs, traderName, totalMargin, title }){
   const changedLines = (diffs.changed||[]).slice(0,10).map(c =>
     `:arrows_counterclockwise:${fmtMode(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`
   );
+  const removedLines = (diffs.removed||[]).slice(0,10).map(r =>
+    `:white_check_mark:${fmtMode(r.mode)} \`${r.symbol}\` x${r.lev} • amount: *${fmt3(r.amount)}* • @ *${fmt3(r.openPrice)}* • ${fmtMarginType(r.marginMode)} • margin: *${fmt3(r.margin)} USDT* • ${r.openAtStr} VNT • *đã tất toán*`
+  );
 
-  if (!addedLines.length && !changedLines.length) return "";
-
+  if (!addedLines.length && !changedLines.length && !removedLines.length) return "";
   const headLeft = title || `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid})`;
   const headRight = `Tổng margin: *${fmt3(totalMargin||0)} USDT*`;
-  return `${headLeft} • ${headRight}\n${[...addedLines, ...changedLines].join("\n")}`;
+  return `${headLeft} • ${headRight}\n${[...addedLines, ...changedLines, ...removedLines].join("\n")}`;
 }
 
 // ---------- Handlers ----------
-export async function onRequestOptions(){
-  return new Response(null, { status: 204, headers: corsHeaders() });
-}
+export async function onRequestOptions(){ return new Response(null, { status: 204, headers: corsHeaders() }); }
 
 export async function onRequest(context){
   const { request, env } = context;
@@ -191,20 +199,21 @@ export async function onRequest(context){
     const url = new URL(context.request.url);
     const targetUids = String(env.TARGET_UIDS || "").split(",").map(x=>(x||"").trim()).filter(Boolean);
 
-    // ---- TEST: preview từ cache, gộp vào 1 message, phân cách "-------------" ----
+    // ---- TEST preview từ cache ----
     if (url.searchParams.get("testNotification") === "true"){
       if (!targetUids.length){
         await postSlack(env, ":warning: [TEST] Không có TARGET_UIDS trong env để preview cache.");
         return new Response(JSON.stringify({ success:true, message:"No TARGET_UIDS set" }), { headers: corsHeaders() });
       }
       const blocks = [];
-      for (const uid of targetUids){
-        const state = await readState(uid);
+      for (const loopUid of targetUids){
+        const state = await readState(loopUid);
         const orders = (state.orders||[]).slice().sort((a,b)=>b.openAt-a.openAt);
         const traderName = orders.length ? (orders[0].trader||"") : "";
+        const headerUid = orders.length ? (orders[0].traderUid || loopUid) : loopUid; // <<<< dùng UID từ data nếu có
         const totalMargin = orders.reduce((s,o)=>s+safeNum(o.margin), 0);
-        const diffs = { added: orders.slice(0,10), changed: [] }; // preview coi như added
-        const text = buildSlack({ uid, diffs, traderName, totalMargin, title: `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${uid})` }) || `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${uid}) • Tổng margin: *0 USDT*\n(cache trống)`;
+        const diffs = { added: orders.slice(0,10), changed: [], removed: [] }; // preview coi như added
+        const text = buildSlack({ uid: headerUid, diffs, traderName, totalMargin, title: `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${headerUid})` }) || `:mag: Preview từ cache — Trader *${traderName||""}* (UID ${headerUid}) • Tổng margin: *0 USDT*\n(cache trống)`;
         blocks.push(text);
       }
       const nowVNT = tsVNT(Date.now());
@@ -230,7 +239,7 @@ export async function onRequest(context){
       if (!resp.ok) continue;
       const data = await resp.json();
       if (data && data.success === true){
-        const rows = (data.data?.content || []).map(r=>({ ...r, _uid: uid })); // _uid để preserve khi de-dup
+        const rows = (data.data?.content || []).map(r=>({ ...r, _uid: uid })); // gắn _uid để normalize lấy đúng traderUid
         perUid[uid] = rows;
         all.push(...rows);
       }
@@ -244,32 +253,62 @@ export async function onRequest(context){
       const t = o.pageTime || o.openTime || 0;
       if (!prev || t > (prev.pageTime || prev.openTime || 0)) byKey.set(key, o);
     }
-    // 👉 normalizedAll sẽ có cả uid + followers
     const normalizedAll = normalizeAndCompute(Array.from(byKey.values()));
 
-    // gộp Slack cho các target uids
+    // gộp Slack theo target uids
     const blocks = [];
-    for (const uid of targetUids){
-      const rows = perUid[uid] || [];
+    for (const loopUid of targetUids){
+      const rows = perUid[loopUid] || [];
       const nowNorm = normalizeAndCompute(rows);
       const snapshotNow = nowNorm.map(pickSnapshotFields);
 
-      const state = await readState(uid);
+      const state = await readState(loopUid);
 
       // bootstrap: lần đầu chỉ lưu, không gửi
       if (!state.bootstrapped){
-        await writeState(uid, { orders: snapshotNow, lastFP: "", bootstrapped: true });
+        await writeState(loopUid, { orders: snapshotNow, lastFP: "", bootstrapped: true, pendingEmpty: snapshotNow.length===0 });
         continue;
       }
 
+      // ===== Empty debounce =====
+      if (snapshotNow.length === 0){
+        if ((state.orders || []).length === 0){
+          await writeState(loopUid, { ...state, orders: [], pendingEmpty: false });
+          continue;
+        }
+        if (!state.pendingEmpty){
+          await writeState(loopUid, { ...state, pendingEmpty: true });
+          continue;
+        }
+        // confirm removed all
+        const diffs = { added: [], changed: [], removed: (state.orders || []).slice(0, 50) };
+        const fp = fingerprintDiffs(diffs);
+        if (fp !== state.lastFP){
+          const traderName = state.orders[0]?.trader || "";
+          const headerUid = state.orders[0]?.traderUid || loopUid; // <<<< dùng UID từ snapshot cũ
+          const text = buildSlack({ uid: headerUid, diffs, traderName, totalMargin: 0 });
+          if (text) blocks.push(text);
+          state.lastFP = fp;
+        }
+        state.orders = [];
+        state.pendingEmpty = false;
+        await writeState(loopUid, state);
+        continue;
+      }
+
+      // có lệnh -> hủy pendingEmpty nếu có
+      if (state.pendingEmpty) state.pendingEmpty = false;
+
+      // diff & dedupe
       const diffs = diffOrders(state.orders || [], snapshotNow);
-      const hasContent = (diffs.added && diffs.added.length) || (diffs.changed && diffs.changed.length);
+      const hasContent = (diffs.added?.length || diffs.changed?.length || diffs.removed?.length);
       if (hasContent){
         const fp = fingerprintDiffs(diffs);
         if (fp !== state.lastFP){
           const traderName = snapshotNow[0]?.trader || state.orders[0]?.trader || "";
+          const headerUid = snapshotNow[0]?.traderUid || loopUid; // <<<< dùng UID từ data hiện tại
           const totalMargin = snapshotNow.reduce((s,o)=>s+safeNum(o.margin), 0);
-          const text = buildSlack({ uid, diffs, traderName, totalMargin });
+          const text = buildSlack({ uid: headerUid, diffs, traderName, totalMargin });
           if (text) blocks.push(text);
           state.lastFP = fp;
         }
@@ -277,14 +316,14 @@ export async function onRequest(context){
 
       // lưu snapshot mới
       state.orders = snapshotNow;
-      await writeState(uid, state);
+      await writeState(loopUid, state);
     }
 
     if (blocks.length){
       await postSlack(env, blocks.join("\n-------------\n"));
     }
 
-    // Trả về data đã có `uid` + `followers`
+    // JSON response cho client: đã gồm traderUid chuẩn
     return new Response(JSON.stringify({ success:true, data: normalizedAll }), { headers: corsHeaders() });
   } catch (e){
     return new Response(JSON.stringify({ success:false, error: String(e && e.message ? e.message : e) }), { status:500, headers: corsHeaders() });
