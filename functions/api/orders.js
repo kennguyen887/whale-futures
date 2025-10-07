@@ -93,9 +93,13 @@ function pickSnapshotFields(n) {
     openAtStr: n.openAtStr || "",
   };
 }
-function fmtUSD(n) {
-  const x = Number(n || 0);
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(x);
+function fmt3(n) {
+  const x = safeNum(n);
+  const hasFraction = Math.abs(x - Math.trunc(x)) > 1e-9;
+  return x.toLocaleString("en-US", {
+    minimumFractionDigits: hasFraction ? 3 : 0,
+    maximumFractionDigits: 3,
+  });
 }
 
 // ---------- Persistent state (Cache API) ----------
@@ -194,7 +198,7 @@ function buildSlack({ uid, diffs, traderName, totalMargin, title }) {
     (a) =>
       `:new: ${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${fmtMarginType(
         a.marginMode
-      )} • margin: *${fmtUSD(a.margin)} USDT* • ${a.openAtStr} VNT`
+      )} • margin: *${fmt3(a.margin)} USDT* • ${a.openAtStr} VNT`
   );
   const changedLines = (diffs.changed || [])
     .slice(0, 10)
@@ -205,7 +209,7 @@ function buildSlack({ uid, diffs, traderName, totalMargin, title }) {
   const headLeft =
     title ||
     `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid})`;
-  const headRight = `Tổng margin: *${fmtUSD(totalMargin || 0)} USDT*`;
+  const headRight = `Tổng margin: *${fmt3(totalMargin || 0)} USDT*`;
   const header = `${headLeft} • ${headRight}`;
 
   const sections = [];
@@ -267,7 +271,7 @@ export async function onRequest(context) {
           traderName,
           totalMargin,
           title: `:mag: Preview từ cache — Trader *${traderName || ""}* (UID ${uid})`,
-        }) || `:mag: Preview từ cache — Trader *${traderName || ""}* (UID ${uid}) • Tổng margin: *${fmtUSD(totalMargin)} USDT*\n(cache trống)`;
+        }) || `:mag: Preview từ cache — Trader *${traderName || ""}* (UID ${uid}) • Tổng margin: *${fmt3(totalMargin)} USDT*\n(cache trống)`;
 
         blocks.push(text);
       }
