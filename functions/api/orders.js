@@ -67,7 +67,7 @@ function normalizeAndCompute(rows) {
       marginMode: marginModeFromOpenType(o.openType),
       amount: o.amount,
       openPrice: o.openAvgPrice,
-      margin: o.margin,
+      margin: o.margin, // <- dùng cho per-line margin & tổng margin
       followers: o.followers,
       openAt: o.openTime || 0,
       openAtStr: tsVNT(o.openTime || 0),
@@ -81,16 +81,21 @@ function normalizeAndCompute(rows) {
 function pickSnapshotFields(n) {
   return {
     id: n.id,
-    trader: n.trader || "",        // lưu luôn trader để preview từ cache có tên
+    trader: n.trader || "",            // lưu trader để preview từ cache có tên
     symbol: n.symbol,
     mode: n.mode,
     lev: Number(n.lev || 0),
     amount: Number(n.amount || 0),
     openPrice: Number(n.openPrice || 0),
+    margin: Number(n.margin || 0),     // <- cần cho tổng margin / per-line
     marginMode: n.marginMode,
     openAt: Number(n.openAt || 0),
     openAtStr: n.openAtStr || "",
   };
+}
+function fmtUSD(n) {
+  const x = Number(n || 0);
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(x);
 }
 
 // ---------- Persistent state (Cache API) ----------
@@ -158,7 +163,7 @@ function diffOrdersWithGuard(prevState, curr) {
   return { added, changed };
 }
 
-// ---------- Slack helpers (single source of truth) ----------
+// ---------- Slack (single source of truth) ----------
 async function postSlack(env, text) {
   const token = env.SLACK_BOT_TOKEN || "";
   const channel = env.SLACK_CHANNEL_ID || "C09JWCT503Y";
@@ -170,28 +175,26 @@ async function postSlack(env, text) {
   });
 }
 function fmtMode(mode) {
-  // giữ style bạn đã chọn (không thêm emoji chart để bớt noisy) — nếu muốn, thêm :chart_with_upwards_trend:/downwards
   if (mode === "long") return " *Long*";
   if (mode === "short") return " *Short*";
   return "❓";
 }
-function fmtMargin(m) {
+function fmtMarginType(m) {
   if (m === "Isolated") return ":shield: Isolated";
   if (m === "Cross") return ":link: Cross";
   return m || "";
 }
 /**
- * Reuse 100% cho cả diff và preview:
- * - Nếu truyền `title` thì dùng làm header tùy biến; nếu không thì dùng header mặc định.
- * - `diffs` dạng { added: [...], changed: [...] }.
- * - `traderName` lấy từ data (nếu trống thì để "").
+ * Dùng cho cả diff & preview:
+ * - header có "Tổng margin: xxx USDT"
+ * - nếu có `title` sẽ dùng title làm phần đầu header (ví dụ Preview), ngược lại dùng mặc định
  */
-function buildSlack({ uid, diffs, traderName, title }) {
+function buildSlack({ uid, diffs, traderName, totalMargin, title }) {
   const addedLines = (diffs.added || []).slice(0, 10).map(
     (a) =>
-      `:new: ${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${fmtMargin(
+      `:new: ${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${fmtMarginType(
         a.marginMode
-      )} • ${a.openAtStr} VNT`
+      )} • margin: *${fmtUSD(a.margin)} USDT* • ${a.openAtStr} VNT`
   );
   const changedLines = (diffs.changed || [])
     .slice(0, 10)
@@ -199,9 +202,12 @@ function buildSlack({ uid, diffs, traderName, title }) {
 
   if (!addedLines.length && !changedLines.length) return "";
 
-  const header =
+  const headLeft =
     title ||
-    `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) có cập nhật lệnh:`;
+    `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid})`;
+  const headRight = `Tổng margin: *${fmtUSD(totalMargin || 0)} USDT*`;
+  const header = `${headLeft} • ${headRight}`;
+
   const sections = [];
   if (addedLines.length) sections.push(addedLines.join("\n"));
   if (changedLines.length) sections.push(changedLines.join("\n"));
@@ -231,7 +237,7 @@ export async function onRequest(context) {
   try {
     const url = new URL(context.request.url);
 
-    // -------- TEST: gửi preview từ cache với buildSlack (reuse), không fetch --------
+    // -------- TEST: preview từ cache, gộp message, phân cách bằng "-------------" --------
     const testNotification = url.searchParams.get("testNotification");
     if (testNotification === "true") {
       const targetUids = String(env.TARGET_UIDS || "")
@@ -246,30 +252,35 @@ export async function onRequest(context) {
         });
       }
 
+      const blocks = [];
       for (const uid of targetUids) {
         const prevState = await readState(uid);
+        const orders = (prevState.orders || []).slice().sort((a, b) => Number(b.openAt || 0) - Number(a.openAt || 0));
+        const traderName = orders.length ? (orders[0].trader || "") : "";
+        const totalMargin = orders.reduce((sum, o) => sum + Number(o.margin || 0), 0);
 
-        // traderName: lấy từ snapshot nếu có, ưu tiên order mới nhất
-        const sorted = (prevState.orders || [])
-          .slice()
-          .sort((a, b) => Number(b.openAt || 0) - Number(a.openAt || 0));
-        const traderName = sorted.length ? (sorted[0].trader || "") : "";
-
-        // reuse buildSlack bằng cách coi snapshot là "added" preview, "changed" rỗng
-        const diffs = { added: sorted.slice(0, 10), changed: [] };
+        // preview: đối xử snapshot như "added"; "changed" rỗng
+        const diffs = { added: orders.slice(0, 10), changed: [] };
         const text = buildSlack({
           uid,
           diffs,
           traderName,
-          title: `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) — :mag: Preview từ cache:`,
-        });
-        await postSlack(env, text || `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) — (cache trống)`);
+          totalMargin,
+          title: `:mag: Preview từ cache — Trader *${traderName || ""}* (UID ${uid})`,
+        }) || `:mag: Preview từ cache — Trader *${traderName || ""}* (UID ${uid}) • Tổng margin: *${fmtUSD(totalMargin)} USDT*\n(cache trống)`;
+
+        blocks.push(text);
       }
 
       const nowVNT = new Date()
         .toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false })
         .replace(",", "");
-      await postSlack(env, `✅ [TEST] Hoàn tất preview cache lúc ${nowVNT} VNT`);
+      const message = [
+        `✅ [TEST] Preview cache lúc ${nowVNT} VNT`,
+        ...blocks
+      ].join("\n-------------\n");
+
+      await postSlack(env, message);
       return new Response(JSON.stringify({ success: true, message: "Test Slack (cache preview) sent" }), {
         headers: corsHeaders(),
       });
@@ -330,7 +341,8 @@ export async function onRequest(context) {
     const merged = Array.from(byKey.values());
     const normalized = normalizeAndCompute(merged);
 
-    // Check & notify per TARGET UID (reuse buildSlack)
+    // Check & notify per TARGET UID — gộp message, phân cách bằng "-------------"
+    const blocks = [];
     for (const uid of targetUids) {
       const targetRowsRaw = perUid[uid] || [];
       const targetNormalized = normalizeAndCompute(targetRowsRaw);
@@ -339,11 +351,12 @@ export async function onRequest(context) {
       const prevState = await readState(uid);
       const diffs = diffOrdersWithGuard(prevState, targetSnapshotNow);
 
-      // Lấy tên trader từ data hiện tại nếu có (ưu tiên), fallback rỗng
-      const traderName = targetNormalized.length ? (targetNormalized[0].trader || "") : "";
+      // tên trader & tổng margin từ snapshot NOW (rõ ràng hơn)
+      const traderName = targetSnapshotNow.length ? (targetSnapshotNow[0].trader || "") : "";
+      const totalMargin = targetSnapshotNow.reduce((sum, o) => sum + Number(o.margin || 0), 0);
 
-      const text = buildSlack({ uid, diffs, traderName });
-      if (text) await postSlack(env, text);
+      const text = buildSlack({ uid, diffs, traderName, totalMargin });
+      if (text) blocks.push(text);
 
       // Update state
       const maxOpenAtNow = targetSnapshotNow.reduce(
@@ -358,6 +371,11 @@ export async function onRequest(context) {
         maxOpenAt: maxOpenAtNow,
         seenIds: Array.from(newSeen),
       });
+    }
+
+    if (blocks.length) {
+      const message = blocks.join("\n-------------\n");
+      await postSlack(env, message);
     }
 
     return new Response(JSON.stringify({ success: true, data: normalized }), {
