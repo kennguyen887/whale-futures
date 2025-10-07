@@ -93,6 +93,11 @@ function pickSnapshotFields(n) {
     openAtStr: n.openAtStr || "",
   };
 }
+function safeNum(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function fmt3(n) {
   const x = safeNum(n);
   const hasFraction = Math.abs(x - Math.trunc(x)) > 1e-9;
