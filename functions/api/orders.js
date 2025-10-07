@@ -18,6 +18,7 @@ const BROWSER_HEADERS = {
 const DEFAULT_UIDS =
   "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
 
+// ---------- Common helpers ----------
 function corsHeaders() {
   return {
     "content-type": "application/json; charset=utf-8",
@@ -26,33 +27,27 @@ function corsHeaders() {
     "access-control-allow-headers": "Content-Type, X-API-Key",
   };
 }
-
 function toPair(symUnderscore = "") {
   return String(symUnderscore).replace("_", "");
 }
-
 function modeFromPositionType(pt) {
   if (pt === 1) return "long";
   if (pt === 2) return "short";
   return "unknown";
 }
-
 function marginModeFromOpenType(ot) {
   if (ot === 1) return "Isolated";
   if (ot === 2) return "Cross";
   return "Unknown";
 }
-
 function notional(order) {
   return Number(order.openAvgPrice || 0) * Number(order.amount || 0);
 }
-
 function marginPct(order) {
   const m = Number(order.margin || 0);
   const n = notional(order);
   return n > 0 ? (m / n) * 100 : 0;
 }
-
 function normalizeAndCompute(rows) {
   const TIMEZONE = "Asia/Ho_Chi_Minh";
   const tsVNT = (t) =>
@@ -83,10 +78,10 @@ function normalizeAndCompute(rows) {
     }))
     .sort((a, b) => b.openAt - a.openAt);
 }
-
 function pickSnapshotFields(n) {
   return {
     id: n.id,
+    trader: n.trader || "",        // lưu luôn trader để preview từ cache có tên
     symbol: n.symbol,
     mode: n.mode,
     lev: Number(n.lev || 0),
@@ -95,11 +90,10 @@ function pickSnapshotFields(n) {
     marginMode: n.marginMode,
     openAt: Number(n.openAt || 0),
     openAtStr: n.openAtStr || "",
-    // trader không lưu trong snapshot để tiết kiệm; test preview sẽ mask UID
   };
 }
 
-/** -------- Persistent state in Cloudflare Cache (per UID) -------- */
+// ---------- Persistent state (Cache API) ----------
 async function readState(uid) {
   const req = new Request(`https://cache.local/orders/${uid}`);
   const res = await caches.default.match(req);
@@ -115,26 +109,25 @@ async function readState(uid) {
     return { orders: [], maxOpenAt: 0, seenIds: [] };
   }
 }
-
 async function writeState(uid, state) {
   const req = new Request(`https://cache.local/orders/${uid}`);
   const body = JSON.stringify({
     orders: state.orders || [],
     maxOpenAt: Number(state.maxOpenAt || 0),
-    seenIds: (state.seenIds || []).slice(-300), // cap để cache bền hơn
+    seenIds: (state.seenIds || []).slice(-300),
   });
   const res = new Response(body, { headers: { "content-type": "application/json" } });
   await caches.default.put(req, res);
 }
 
-/** Diff with guard: avoid "new" spam by maxOpenAt & seenIds */
+// ---------- Diff with anti-spam guard ----------
 function diffOrdersWithGuard(prevState, curr) {
   const prev = prevState.orders || [];
   const prevMap = new Map(prev.map((p) => [String(p.id), p]));
   const seenIds = new Set((prevState.seenIds || []).map((x) => String(x)));
   const maxOpenAtPrev = Number(prevState.maxOpenAt || 0);
 
-  // First-time bootstrap: don't send anything
+  // first-time bootstrap: don't send
   if (!prev.length && !seenIds.size && maxOpenAtPrev === 0) {
     return { added: [], changed: [] };
   }
@@ -147,14 +140,12 @@ function diffOrdersWithGuard(prevState, curr) {
     const p = prevMap.get(idKey);
 
     if (!p) {
-      // only report new if strictly newer than what we've seen
       if (!seenIds.has(idKey) && Number(c.openAt || 0) > maxOpenAtPrev) {
         added.push(c);
       }
       continue;
     }
 
-    // detect changes
     const ch = [];
     if (p.lev !== c.lev) ch.push(`lev ${p.lev}→${c.lev}`);
     if (p.amount !== c.amount) ch.push(`amount ${p.amount}→${c.amount}`);
@@ -167,94 +158,57 @@ function diffOrdersWithGuard(prevState, curr) {
   return { added, changed };
 }
 
-/** Slack helpers */
+// ---------- Slack helpers (single source of truth) ----------
 async function postSlack(env, text) {
   const token = env.SLACK_BOT_TOKEN || "";
   const channel = env.SLACK_CHANNEL_ID || "C09JWCT503Y";
   if (!token || !channel || !text) return;
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-type": "application/json" },
     body: JSON.stringify({ channel, text, mrkdwn: true }),
   });
 }
-
-// Mask UID như ví dụ 57*****5
-function maskUid(uid) {
-  const s = String(uid || "");
-  if (s.length <= 3) return s;
-  return s.slice(0, 2) + "*****" + s.slice(-1);
+function fmtMode(mode) {
+  // giữ style bạn đã chọn (không thêm emoji chart để bớt noisy) — nếu muốn, thêm :chart_with_upwards_trend:/downwards
+  if (mode === "long") return " *Long*";
+  if (mode === "short") return " *Short*";
+  return "❓";
 }
-
-/** Bạn đã update icon: giữ nguyên theo yêu cầu */
-function buildSlackMessage(uid, diffs, traderName) {
-  const modeIcon = (mode) => {
-    if (mode === "long") return " *Long*";
-    if (mode === "short") return " *Short*";
-    return "❓";
-  };
-  const marginIcon = (m) => {
-    if (m === "Isolated") return ":shield: Isolated";
-    if (m === "Cross") return ":link: Cross";
-    return m || "";
-  };
-
-  const addedLines = diffs.added.slice(0, 10).map(
+function fmtMargin(m) {
+  if (m === "Isolated") return ":shield: Isolated";
+  if (m === "Cross") return ":link: Cross";
+  return m || "";
+}
+/**
+ * Reuse 100% cho cả diff và preview:
+ * - Nếu truyền `title` thì dùng làm header tùy biến; nếu không thì dùng header mặc định.
+ * - `diffs` dạng { added: [...], changed: [...] }.
+ * - `traderName` lấy từ data (nếu trống thì để "").
+ */
+function buildSlack({ uid, diffs, traderName, title }) {
+  const addedLines = (diffs.added || []).slice(0, 10).map(
     (a) =>
-      `:new: ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
+      `:new: ${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${fmtMargin(
         a.marginMode
       )} • ${a.openAtStr} VNT`
   );
-
-  const changedLines = diffs.changed
+  const changedLines = (diffs.changed || [])
     .slice(0, 10)
-    .map((c) => `:arrows_counterclockwise: ${modeIcon(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`);
+    .map((c) => `:arrows_counterclockwise: ${fmtMode(c.mode)} \`${c.symbol}\` — ${c.changes.join(", ")}`);
 
   if (!addedLines.length && !changedLines.length) return "";
 
-  const header = `:bust_in_silhouette: Trader *${traderName || maskUid(uid)}* (UID ${uid}) có cập nhật lệnh:`;
+  const header =
+    title ||
+    `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) có cập nhật lệnh:`;
   const sections = [];
   if (addedLines.length) sections.push(addedLines.join("\n"));
   if (changedLines.length) sections.push(changedLines.join("\n"));
   return `${header}\n${sections.join("\n")}`;
 }
 
-/** NEW: build Slack preview từ cache orders khi testNotification=true */
-function buildSlackSnapshotFromCache(uid, snapshotOrders) {
-  const modeIcon = (mode) => {
-    if (mode === "long") return " *Long*";
-    if (mode === "short") return " *Short*";
-    return "❓";
-  };
-  const marginIcon = (m) => {
-    if (m === "Isolated") return ":shield: Isolated";
-    if (m === "Cross") return ":link: Cross";
-    return m || "";
-  };
-
-  // Sắp xếp theo openAt giảm dần rồi lấy top 10
-  const top = (snapshotOrders || [])
-    .slice()
-    .sort((a, b) => Number(b.openAt || 0) - Number(a.openAt || 0))
-    .slice(0, 10);
-
-  if (!top.length) {
-    return `:bust_in_silhouette: UID ${uid}: *(chưa có dữ liệu cache để preview)*`;
-  }
-
-  const header = `:bust_in_silhouette: Trader *${maskUid(uid)}* (UID ${uid}) — :mag: Preview từ cache:`;
-  const lines = top.map(
-    (o) =>
-      `:page_facing_up:${modeIcon(o.mode)} \`${o.symbol}\` x${o.lev} • amount: *${o.amount}* • @ *${o.openPrice}* • ${marginIcon(
-        o.marginMode
-      )} • ${o.openAtStr} VNT`
-  );
-  return `${header}\n${lines.join("\n")}`;
-}
-
+// ---------- Handlers ----------
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -277,7 +231,7 @@ export async function onRequest(context) {
   try {
     const url = new URL(context.request.url);
 
-    // -------- TEST: Gửi message từ cache, không fetch MEXC --------
+    // -------- TEST: gửi preview từ cache với buildSlack (reuse), không fetch --------
     const testNotification = url.searchParams.get("testNotification");
     if (testNotification === "true") {
       const targetUids = String(env.TARGET_UIDS || "")
@@ -292,10 +246,24 @@ export async function onRequest(context) {
         });
       }
 
-      for (const target of targetUids) {
-        const prevState = await readState(target);
-        const text = buildSlackSnapshotFromCache(target, prevState.orders || []);
-        await postSlack(env, text);
+      for (const uid of targetUids) {
+        const prevState = await readState(uid);
+
+        // traderName: lấy từ snapshot nếu có, ưu tiên order mới nhất
+        const sorted = (prevState.orders || [])
+          .slice()
+          .sort((a, b) => Number(b.openAt || 0) - Number(a.openAt || 0));
+        const traderName = sorted.length ? (sorted[0].trader || "") : "";
+
+        // reuse buildSlack bằng cách coi snapshot là "added" preview, "changed" rỗng
+        const diffs = { added: sorted.slice(0, 10), changed: [] };
+        const text = buildSlack({
+          uid,
+          diffs,
+          traderName,
+          title: `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) — :mag: Preview từ cache:`,
+        });
+        await postSlack(env, text || `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid}) — (cache trống)`);
       }
 
       const nowVNT = new Date()
@@ -326,7 +294,7 @@ export async function onRequest(context) {
     const perUid = {};
     const all = [];
 
-    // Fetch per UID (TTL ngắn để giảm rate-limit mà vẫn tươi)
+    // Fetch per UID
     for (const uid of uids) {
       const q = new URL(API_ORDERS);
       q.searchParams.set("limit", String(limit));
@@ -362,22 +330,20 @@ export async function onRequest(context) {
     const merged = Array.from(byKey.values());
     const normalized = normalizeAndCompute(merged);
 
-    // Check & notify per TARGET UID
-    for (const target of targetUids) {
-      const targetRowsRaw = perUid[target] || [];
+    // Check & notify per TARGET UID (reuse buildSlack)
+    for (const uid of targetUids) {
+      const targetRowsRaw = perUid[uid] || [];
       const targetNormalized = normalizeAndCompute(targetRowsRaw);
       const targetSnapshotNow = targetNormalized.map(pickSnapshotFields);
 
-      const prevState = await readState(target);
+      const prevState = await readState(uid);
       const diffs = diffOrdersWithGuard(prevState, targetSnapshotNow);
 
-      // Vì không lưu trader name trong cache, dùng tên từ data hiện tại nếu có
-      const traderName = targetNormalized.length ? targetNormalized[0].trader : maskUid(target);
+      // Lấy tên trader từ data hiện tại nếu có (ưu tiên), fallback rỗng
+      const traderName = targetNormalized.length ? (targetNormalized[0].trader || "") : "";
 
-      const slackText = buildSlackMessage(target, diffs, traderName);
-      if (slackText) {
-        await postSlack(env, slackText);
-      }
+      const text = buildSlack({ uid, diffs, traderName });
+      if (text) await postSlack(env, text);
 
       // Update state
       const maxOpenAtNow = targetSnapshotNow.reduce(
@@ -385,9 +351,9 @@ export async function onRequest(context) {
         Number(prevState.maxOpenAt || 0)
       );
       const newSeen = new Set(prevState.seenIds || []);
-      for (const a of diffs.added) newSeen.add(String(a.id));
+      for (const a of diffs.added || []) newSeen.add(String(a.id));
 
-      await writeState(target, {
+      await writeState(uid, {
         orders: targetSnapshotNow,
         maxOpenAt: maxOpenAtNow,
         seenIds: Array.from(newSeen),
@@ -399,10 +365,7 @@ export async function onRequest(context) {
     });
   } catch (e) {
     return new Response(
-      JSON.stringify({
-        success: false,
-        error: String(e && e.message ? e.message : e),
-      }),
+      JSON.stringify({ success: false, error: String(e && e.message ? e.message : e) }),
       { status: 500, headers: corsHeaders() }
     );
   }
