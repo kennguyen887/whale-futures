@@ -1,6 +1,6 @@
 // Cloudflare Pages Functions - /api/orders
 // GET /api/orders?uids=1,2,3&limit=10
-// Test Slack: GET /api/orders?testNotification=true
+// Test Slack (preview cache only, no fetch): GET /api/orders?testNotification=true
 
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
@@ -95,6 +95,7 @@ function pickSnapshotFields(n) {
     marginMode: n.marginMode,
     openAt: Number(n.openAt || 0),
     openAtStr: n.openAtStr || "",
+    // trader không lưu trong snapshot để tiết kiệm; test preview sẽ mask UID
   };
 }
 
@@ -181,8 +182,15 @@ async function postSlack(env, text) {
   });
 }
 
+// Mask UID như ví dụ 57*****5
+function maskUid(uid) {
+  const s = String(uid || "");
+  if (s.length <= 3) return s;
+  return s.slice(0, 2) + "*****" + s.slice(-1);
+}
+
+/** Bạn đã update icon: giữ nguyên theo yêu cầu */
 function buildSlackMessage(uid, diffs, traderName) {
-  // dùng shortcode icon để đồng nhất Slack
   const modeIcon = (mode) => {
     if (mode === "long") return " *Long*";
     if (mode === "short") return " *Short*";
@@ -198,7 +206,7 @@ function buildSlackMessage(uid, diffs, traderName) {
     (a) =>
       `:new: ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
         a.marginMode
-      )} • ${a.openAtStr} VNT` // luôn VNT từ openAtStr
+      )} • ${a.openAtStr} VNT`
   );
 
   const changedLines = diffs.changed
@@ -207,14 +215,46 @@ function buildSlackMessage(uid, diffs, traderName) {
 
   if (!addedLines.length && !changedLines.length) return "";
 
-  const header = `------------------\n :bust_in_silhouette: Trader *${traderName || "Unknown"}* (UID \`${uid}\`) có cập nhật lệnh:`;
+  const header = `:bust_in_silhouette: Trader *${traderName || maskUid(uid)}* (UID ${uid}) có cập nhật lệnh:`;
   const sections = [];
   if (addedLines.length) sections.push(addedLines.join("\n"));
   if (changedLines.length) sections.push(changedLines.join("\n"));
   return `${header}\n${sections.join("\n")}`;
 }
 
-/** -------- Handlers -------- */
+/** NEW: build Slack preview từ cache orders khi testNotification=true */
+function buildSlackSnapshotFromCache(uid, snapshotOrders) {
+  const modeIcon = (mode) => {
+    if (mode === "long") return " *Long*";
+    if (mode === "short") return " *Short*";
+    return "❓";
+  };
+  const marginIcon = (m) => {
+    if (m === "Isolated") return ":shield: Isolated";
+    if (m === "Cross") return ":link: Cross";
+    return m || "";
+  };
+
+  // Sắp xếp theo openAt giảm dần rồi lấy top 10
+  const top = (snapshotOrders || [])
+    .slice()
+    .sort((a, b) => Number(b.openAt || 0) - Number(a.openAt || 0))
+    .slice(0, 10);
+
+  if (!top.length) {
+    return `:bust_in_silhouette: UID ${uid}: *(chưa có dữ liệu cache để preview)*`;
+  }
+
+  const header = `:bust_in_silhouette: Trader *${maskUid(uid)}* (UID ${uid}) — :mag: Preview từ cache:`;
+  const lines = top.map(
+    (o) =>
+      `:page_facing_up:${modeIcon(o.mode)} \`${o.symbol}\` x${o.lev} • amount: *${o.amount}* • @ *${o.openPrice}* • ${marginIcon(
+        o.marginMode
+      )} • ${o.openAtStr} VNT`
+  );
+  return `${header}\n${lines.join("\n")}`;
+}
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -237,17 +277,36 @@ export async function onRequest(context) {
   try {
     const url = new URL(context.request.url);
 
-    // Test Slack
+    // -------- TEST: Gửi message từ cache, không fetch MEXC --------
     const testNotification = url.searchParams.get("testNotification");
     if (testNotification === "true") {
+      const targetUids = String(env.TARGET_UIDS || "")
+        .split(",")
+        .map((x) => (x || "").trim())
+        .filter(Boolean);
+
+      if (!targetUids.length) {
+        await postSlack(env, ":warning: [TEST] Không có TARGET_UIDS trong env để preview cache.");
+        return new Response(JSON.stringify({ success: true, message: "No TARGET_UIDS set" }), {
+          headers: corsHeaders(),
+        });
+      }
+
+      for (const target of targetUids) {
+        const prevState = await readState(target);
+        const text = buildSlackSnapshotFromCache(target, prevState.orders || []);
+        await postSlack(env, text);
+      }
+
       const nowVNT = new Date()
         .toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false })
         .replace(",", "");
-      await postSlack(env, `✅ [TEST] Slack notification from \`/api/orders\` at :clock3: ${nowVNT}`);
-      return new Response(JSON.stringify({ success: true, message: "Test Slack sent" }), {
+      await postSlack(env, `✅ [TEST] Hoàn tất preview cache lúc ${nowVNT} VNT`);
+      return new Response(JSON.stringify({ success: true, message: "Test Slack (cache preview) sent" }), {
         headers: corsHeaders(),
       });
     }
+    // -------- END TEST --------
 
     const uidsStr = url.searchParams.get("uids") || DEFAULT_UIDS;
     const limit = Number(url.searchParams.get("limit") || 10);
@@ -312,8 +371,8 @@ export async function onRequest(context) {
       const prevState = await readState(target);
       const diffs = diffOrdersWithGuard(prevState, targetSnapshotNow);
 
-      // Lấy tên trader (nếu có data)
-      const traderName = targetNormalized.length ? targetNormalized[0].trader : "";
+      // Vì không lưu trader name trong cache, dùng tên từ data hiện tại nếu có
+      const traderName = targetNormalized.length ? targetNormalized[0].trader : maskUid(target);
 
       const slackText = buildSlackMessage(target, diffs, traderName);
       if (slackText) {
