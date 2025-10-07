@@ -18,7 +18,7 @@ const BROWSER_HEADERS = {
 const DEFAULT_UIDS =
   "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784";
 
-// ---------- Utils (nhỏ gọn) ----------
+// ---------- Utils ----------
 function corsHeaders() {
   return {
     "content-type": "application/json; charset=utf-8",
@@ -47,14 +47,13 @@ function tsVNT(t){
   return t ? new Date(t).toLocaleString("en-GB", { timeZone: "Asia/Ho_Chi_Minh", hour12: false }).replace(",", "") : "";
 }
 
-// ---------- Normalize rows ----------
+// ---------- Normalize ----------
 function normalizeAndCompute(rows){
   return rows.map((o)=>{
     const lev = leverageOf(o);
     const openPrice = safeNum(o.openAvgPrice);
     const amount = safeNum(o.amount);
     const margin = marginUSDT(openPrice, amount, lev, o.margin);
-
     return {
       id: o.orderId || o.id,
       trader: o.traderNickName || "",
@@ -90,31 +89,35 @@ function pickSnapshotFields(n){
 async function readState(uid){
   const req = new Request(`https://cache.local/orders/${uid}`);
   const res = await caches.default.match(req);
-  if (!res) return { orders: [], lastFP: "", bootstrapped: false };
+  if (!res) return { orders: [], lastFP: "", bootstrapped: false, pendingEmpty: false };
   try {
     const d = await res.json();
     return {
       orders: Array.isArray(d.orders) ? d.orders : [],
       lastFP: d.lastFP || "",
       bootstrapped: Boolean(d.bootstrapped),
+      pendingEmpty: Boolean(d.pendingEmpty),
     };
-  } catch { return { orders: [], lastFP: "", bootstrapped: false }; }
+  } catch {
+    return { orders: [], lastFP: "", bootstrapped: false, pendingEmpty: false };
+  }
 }
 async function writeState(uid, state){
   const req = new Request(`https://cache.local/orders/${uid}`);
-  const res = new Response(JSON.stringify({
+  const payload = {
     orders: state.orders || [],
     lastFP: state.lastFP || "",
     bootstrapped: Boolean(state.bootstrapped),
-  }), { headers: { "content-type": "application/json" }});
+    pendingEmpty: Boolean(state.pendingEmpty),
+  };
+  const res = new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" }});
   await caches.default.put(req, res);
 }
 
-// ---------- Diff (thêm removed = tất toán) ----------
+// ---------- Diff (thêm removed) ----------
 function diffOrders(prev, curr){
   const prevMap = new Map(prev.map(p=>[String(p.id), p]));
   const currMap = new Map(curr.map(c=>[String(c.id), c]));
-
   const added = [];
   const changed = [];
   const removed = [];
@@ -131,7 +134,7 @@ function diffOrders(prev, curr){
     if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
   }
   for (const p of prev){
-    if (!currMap.has(String(p.id))) removed.push(p); // -> đã tất toán
+    if (!currMap.has(String(p.id))) removed.push(p);
   }
   return { added, changed, removed };
 }
@@ -155,7 +158,6 @@ async function postSlack(env, text){
 }
 function fmtMode(mode){ if(mode==="long")return" *Long*"; if(mode==="short")return" *Short*"; return "❓"; }
 function fmtMarginType(m){ if(m==="Isolated")return":shield: Isolated"; if(m==="Cross")return":link: Cross"; return m||""; }
-
 function buildSlack({ uid, diffs, traderName, totalMargin, title }){
   const addedLines = (diffs.added||[]).slice(0,10).map(a =>
     `:new:${fmtMode(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${fmt3(a.amount)}* • @ *${fmt3(a.openPrice)}* • ${fmtMarginType(a.marginMode)} • margin: *${fmt3(a.margin)} USDT* • ${a.openAtStr} VNT`
@@ -168,17 +170,9 @@ function buildSlack({ uid, diffs, traderName, totalMargin, title }){
   );
 
   if (!addedLines.length && !changedLines.length && !removedLines.length) return "";
-
   const headLeft = title || `:bust_in_silhouette: Trader *${traderName || ""}* (UID ${uid})`;
   const headRight = `Tổng margin: *${fmt3(totalMargin||0)} USDT*`;
-  const header = `${headLeft} • ${headRight}`;
-
-  const bodyLines = [];
-  if (addedLines.length) bodyLines.push(...addedLines);
-  if (changedLines.length) bodyLines.push(...changedLines);
-  if (removedLines.length) bodyLines.push(...removedLines);
-
-  return `${header}\n${bodyLines.join("\n")}`;
+  return `${headLeft} • ${headRight}\n${[...addedLines, ...changedLines, ...removedLines].join("\n")}`;
 }
 
 // ---------- Handlers ----------
@@ -200,7 +194,7 @@ export async function onRequest(context){
     const url = new URL(context.request.url);
     const targetUids = String(env.TARGET_UIDS || "").split(",").map(x=>(x||"").trim()).filter(Boolean);
 
-    // ---- TEST: preview từ cache, gộp message, phân cách "-------------" ----
+    // ---- TEST preview từ cache ----
     if (url.searchParams.get("testNotification") === "true"){
       if (!targetUids.length){
         await postSlack(env, ":warning: [TEST] Không có TARGET_UIDS trong env để preview cache.");
@@ -245,7 +239,7 @@ export async function onRequest(context){
       }
     }
 
-    // de-dup theo orderId mới nhất (pageTime/openTime)
+    // de-dup theo orderId mới nhất
     const byKey = new Map();
     for (const o of all){
       const key = o.orderId || o.id;
@@ -255,7 +249,7 @@ export async function onRequest(context){
     }
     const normalizedAll = normalizeAndCompute(Array.from(byKey.values()));
 
-    // gộp Slack cho các target uids (nếu có) trong 1 message
+    // gộp Slack theo target uids
     const blocks = [];
     for (const uid of targetUids){
       const rows = perUid[uid] || [];
@@ -266,26 +260,60 @@ export async function onRequest(context){
 
       // bootstrap: lần đầu chỉ lưu, không gửi
       if (!state.bootstrapped){
-        await writeState(uid, { orders: snapshotNow, lastFP: "", bootstrapped: true });
+        await writeState(uid, { orders: snapshotNow, lastFP: "", bootstrapped: true, pendingEmpty: snapshotNow.length===0 });
         continue;
       }
 
+      // ===== Empty debounce to avoid false “đã tất toán” =====
+      if (snapshotNow.length === 0){
+        if ((state.orders || []).length === 0){
+          // đang rỗng từ trước → giữ nguyên
+          await writeState(uid, { ...state, orders: [], pendingEmpty: false });
+          continue;
+        }
+        if (!state.pendingEmpty){
+          // lần đầu thấy rỗng -> đánh dấu chờ xác nhận
+          await writeState(uid, { ...state, pendingEmpty: true });
+          continue;
+        }
+        // pendingEmpty === true và vẫn rỗng -> xác nhận tất toán tất cả
+        const diffs = { added: [], changed: [], removed: (state.orders || []).slice(0, 50) };
+        const fp = fingerprintDiffs(diffs);
+        if (fp !== state.lastFP){
+          const traderName = state.orders[0]?.trader || "";
+          const totalMarginNow = 0; // hiện tại không còn lệnh
+          const text = buildSlack({ uid, diffs, traderName, totalMargin: totalMarginNow });
+          if (text) blocks.push(text);
+          state.lastFP = fp;
+        }
+        // clear state sau khi báo
+        state.orders = [];
+        state.pendingEmpty = false;
+        await writeState(uid, state);
+        continue;
+      }
+
+      // snapshotNow có lệnh -> hủy pendingEmpty nếu có
+      if (state.pendingEmpty) state.pendingEmpty = false;
+
+      // diff & dedupe
       const diffs = diffOrders(state.orders || [], snapshotNow);
-      const fp = fingerprintDiffs(diffs);
       const hasContent =
         (diffs.added && diffs.added.length) ||
         (diffs.changed && diffs.changed.length) ||
         (diffs.removed && diffs.removed.length);
-
-      if (hasContent && fp !== state.lastFP){
-        const traderName = snapshotNow.length ? (snapshotNow[0].trader || "") : (state.orders[0]?.trader || "");
-        const totalMargin = snapshotNow.reduce((s,o)=>s+safeNum(o.margin), 0);
-        const text = buildSlack({ uid, diffs, traderName, totalMargin });
-        if (text) blocks.push(text);
-        state.lastFP = fp;
+      if (hasContent){
+        const fp = fingerprintDiffs(diffs);
+        if (fp !== state.lastFP){
+          const traderName = snapshotNow[0]?.trader || state.orders[0]?.trader || "";
+          const totalMargin = snapshotNow.reduce((s,o)=>s+safeNum(o.margin), 0);
+          const text = buildSlack({ uid, diffs, traderName, totalMargin });
+          if (text) blocks.push(text);
+          state.lastFP = fp;
+        }
       }
 
-      // luôn lưu snapshot mới
+      // lưu snapshot mới
       state.orders = snapshotNow;
       await writeState(uid, state);
     }
