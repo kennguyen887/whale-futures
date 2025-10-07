@@ -184,8 +184,8 @@ async function postSlack(env, text) {
 function buildSlackMessage(uid, diffs, traderName) {
   // dùng shortcode icon để đồng nhất Slack
   const modeIcon = (mode) => {
-    if (mode === "long") return ":chart_with_upwards_trend: *Long*";
-    if (mode === "short") return ":chart_with_downwards_trend: *Short*";
+    if (mode === "long") return " *Long*";
+    if (mode === "short") return " *Short*";
     return "❓";
   };
   const marginIcon = (m) => {
@@ -198,7 +198,7 @@ function buildSlackMessage(uid, diffs, traderName) {
     (a) =>
       `:new: ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
         a.marginMode
-      )} • :clock3: ${a.openAtStr}` // luôn VNT từ openAtStr
+      )} • ${a.openAtStr} VNT` // luôn VNT từ openAtStr
   );
 
   const changedLines = diffs.changed
@@ -207,7 +207,7 @@ function buildSlackMessage(uid, diffs, traderName) {
 
   if (!addedLines.length && !changedLines.length) return "";
 
-  const header = `:bust_in_silhouette: Trader *${traderName || "Unknown"}* (UID \`${uid}\`) có cập nhật lệnh:`;
+  const header = `------------------\n :bust_in_silhouette: Trader *${traderName || "Unknown"}* (UID \`${uid}\`) có cập nhật lệnh:`;
   const sections = [];
   if (addedLines.length) sections.push(addedLines.join("\n"));
   if (changedLines.length) sections.push(changedLines.join("\n"));
