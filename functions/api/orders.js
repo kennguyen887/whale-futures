@@ -168,7 +168,7 @@ function buildSlackMessage(uid, diffs, traderName) {
     (a) =>
       `🆕 ${modeIcon(a.mode)} \`${a.symbol}\` x${a.lev} • amount: *${a.amount}* • @ *${a.openPrice}* • ${marginIcon(
         a.marginMode
-      )} • 🕒 ${a.openAtStr}`
+      )} • 🕒 ${a.openAtStr}` // 👉 luôn lấy openAtStr đã convert sang VNT
   );
 
   const changedLines = diffs.changed
