@@ -1,6 +1,7 @@
-// Cloudflare Pages Functions - /api/notification
-// GET  /api/notification?limit=10
-// TEST /api/notification?testNotification=true   (preview từ cache, không fetch)
+// Cloudflare Pages Functions - /api/orders/notification
+// GET  /api/orders/notification?limit=10
+// TEST /api/orders/notification?testNotification=true   (preview từ cache, auto-bootstrap nếu trống)
+// VIEW /api/orders/notification?inspectCache=true       (xem nhanh cache)
 
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
@@ -23,6 +24,9 @@ function corsHeaders() {
     "access-control-allow-methods": "GET,OPTIONS",
     "access-control-allow-headers": "Content-Type, X-API-Key",
   };
+}
+function jsonRes(status, body) {
+  return new Response(JSON.stringify(body), { status, headers: corsHeaders() });
 }
 function safeNum(x) { const n = Number(x); return Number.isFinite(n) ? n : 0; }
 function toPairNoUnderscore(s = "") { return String(s).replace("_", ""); }
@@ -57,7 +61,7 @@ function tsVNT(t){
 }
 function sign(n){ return n>0?"+":(n<0?"-":""); }
 
-// ---------- Normalize (có traderUid, raw & symbolUS) ----------
+// ---------- Normalize ----------
 function normalizeAndCompute(rows){
   return rows.map((o)=>{
     const lev = leverageOf(o);
@@ -72,7 +76,7 @@ function normalizeAndCompute(rows){
       trader: o.traderNickName || "",
       traderUid,
       symbol: toPairNoUnderscore(symbolUS), // XRPUSDT
-      symbolUS, // XRP_USDT (phục vụ gọi /api/prices)
+      symbolUS, // XRP_USDT (gọi /api/prices)
       mode: modeFromPositionType(o.positionType),
       lev,
       marginMode: marginModeFromOpenType(o.openType),
@@ -140,7 +144,6 @@ async function writeGlobalState(state){
 
 // ---------- Diff (only added & changed) ----------
 function diffOrders(prevList, currList){
-  // prevList & currList là mảng snapshot fields (pickSnapshotFields)
   const prevMap = new Map(prevList.map(p=>[String(p.id), p]));
   const added = [];
   const changed = [];
@@ -211,7 +214,6 @@ function pctChangeVsOpen(openPrice, marketPrice){
 
 // Build Slack lines with required metrics
 function buildLinesWithMetrics(rows, priceMap){
-  // rows: snapshot items; priceMap: { "XRP_USDT": 0.5, ... }
   return rows.map(r=>{
     const mp = safeNum(priceMap[r.symbolUS] || 0);
     const pnl = calcPnl(r.mode, r.openPrice, mp, r.amount);
@@ -223,7 +225,6 @@ function buildLinesWithMetrics(rows, priceMap){
 }
 
 function buildSlackBlocks({ groupedByTrader, prices }){
-  // groupedByTrader: Map(uid, { name, totalMargin, rowsAdded, rowsChanged })
   const blocks = [];
   for (const [uid, g] of groupedByTrader.entries()){
     const head = `:bust_in_silhouette: Trader *${g.name || ""}* (UID ${uid}) • Tổng margin: *${fmt3(g.totalMargin||0)} USDT*`;
@@ -234,7 +235,6 @@ function buildSlackBlocks({ groupedByTrader, prices }){
     }
     if (g.rowsChanged.length){
       lines.push(`:arrows_counterclockwise: *Changed*`);
-      // g.rowsChanged chỉ có thông tin changes; để đủ metric, kèm dòng tóm tắt + 1 dòng metric
       lines.push(...buildLinesWithMetrics(g.rowsChanged.map(x=>x._full), prices));
     }
     if (lines.length){
@@ -242,6 +242,39 @@ function buildSlackBlocks({ groupedByTrader, prices }){
     }
   }
   return blocks;
+}
+
+// ---------- Fetch helpers ----------
+async function fetchForBootstrap(targetUids, limit){
+  const reqs = targetUids.map(async (uid) => {
+    const q = new URL(API_ORDERS);
+    q.searchParams.set("limit", String(limit));
+    q.searchParams.set("orderListType", "ORDER");
+    q.searchParams.set("page", "1");
+    q.searchParams.set("uid", uid);
+
+    const resp = await fetch(q.toString(), { headers: BROWSER_HEADERS, cf: { cacheTtl: 10, cacheEverything: false }});
+    if (!resp.ok) return [];
+    const data = await resp.json().catch(()=>null);
+    return (data?.data?.content || []).map((r)=>({ ...r, _uid: uid }));
+  });
+
+  const chunks = await Promise.all(reqs);
+  const all = chunks.flat();
+
+  // de-dup theo orderId mới nhất
+  const byKey = new Map();
+  all.forEach((o)=>{
+    const key = o.orderId || o.id;
+    const prev = byKey.get(key);
+    const t = o.pageTime || o.openTime || 0;
+    if (!prev || t > (prev?.pageTime || prev?.openTime || 0)) byKey.set(key, o);
+  });
+
+  const merged = Array.from(byKey.values());
+  const normalizedAll = normalizeAndCompute(merged);
+  const snapshotAll = normalizedAll.map(pickSnapshotFields);
+  return { snapshotAll, normalizedAll };
 }
 
 // ---------- Handlers ----------
@@ -257,9 +290,7 @@ export async function onRequest(context){
   if (REQUIRED_KEY){
     const k = request.headers.get("x-api-key") || "";
     if (k !== REQUIRED_KEY){
-      return new Response(JSON.stringify({ success:false, error:"Unauthorized: invalid x-api-key." }), {
-        status: 401, headers: corsHeaders()
-      });
+      return jsonRes(401, { success:false, error:"Unauthorized: invalid x-api-key." });
     }
   }
 
@@ -267,121 +298,106 @@ export async function onRequest(context){
     const url = new URL(context.request.url);
     const targetUids = String(env.TARGET_UIDS || "")
       .split(",")
-      .map(x=>(x||"").trim())
+      .map((x)=>(x||"").trim())
       .filter(Boolean);
-
     const limit = safeNum(url.searchParams.get("limit") || 10);
 
-    // ---- TEST: preview từ cache (không fetch) ----
-    if (url.searchParams.get("testNotification") === "true"){
+    // ---- Inspect cache
+    if (url.searchParams.get("inspectCache") === "true"){
       const state = await readGlobalState();
+      return jsonRes(200, {
+        success:true,
+        bootstrapped: state.bootstrapped,
+        count: state.orderList.length,
+        sample: state.orderList.slice(0,3),
+      });
+    }
+
+    // ---- TEST: preview từ cache (auto-bootstrap nếu rỗng)
+    if (url.searchParams.get("testNotification") === "true"){
+      let state = await readGlobalState();
+
       if (!state.orderList.length){
-        await postSlack(env, ":mag: [TEST] Cache trống (chưa bootstrapped).");
-        return new Response(JSON.stringify({ success:true, message:"Empty cache" }), {
-          headers: corsHeaders(),
-        });
+        if (!targetUids.length){
+          return jsonRes(400, { success:false, error:"TARGET_UIDS is empty (cannot bootstrap in test mode)" });
+        }
+        const { snapshotAll } = await fetchForBootstrap(targetUids, limit);
+        state = { ordersById: Object.fromEntries(snapshotAll.map((x)=>[x.id, x])), orderList: snapshotAll, lastFP: "", bootstrapped: true };
+        await writeGlobalState(state);
       }
+
+      const prices = await getPricesForSymbols(context.request.url, state.orderList.map((o)=>o.symbolUS), REQUIRED_KEY);
+
       // nhóm theo traderUid để hiển thị đẹp
-      const prices = await getPricesForSymbols(context.request.url, state.orderList.map(o=>o.symbolUS), REQUIRED_KEY);
-      const groups = new Map();
-      for (const r of state.orderList){
+      const groups = state.orderList.reduce((acc, r)=>{
         const uid = r.traderUid || "unknown";
-        const g = groups.get(uid) || { name: r.trader || "", totalMargin: 0, rowsAdded: [], rowsChanged: [] };
+        const g = acc.get(uid) || { name: r.trader || "", totalMargin: 0, rowsAdded: [], rowsChanged: [] };
         g.name = g.name || (r.trader || "");
         g.totalMargin += safeNum(r.margin);
         g.rowsAdded.push(r); // preview như added
-        groups.set(uid, g);
-      }
+        acc.set(uid, g);
+        return acc;
+      }, new Map());
+
       const nowVNT = tsVNT(Date.now());
       const blocks = buildSlackBlocks({ groupedByTrader: groups, prices });
       await postSlack(env, [`✅ [TEST] Preview cache lúc ${nowVNT} VNT`, ...blocks].join("\n-------------\n"));
-      return new Response(JSON.stringify({ success:true, message:"Test Slack (cache preview) sent" }), {
-        headers: corsHeaders(),
-      });
+
+      return jsonRes(200, { success:true, message:"Preview sent from cache (auto-bootstrapped if empty)" });
     }
 
     // ---- Normal flow: fetch + merge + diff + notify ----
     if (!targetUids.length){
-      return new Response(JSON.stringify({ success:false, error:"TARGET_UIDS is empty" }), {
-        status: 400, headers: corsHeaders(),
-      });
+      return jsonRes(400, { success:false, error:"TARGET_UIDS is empty" });
     }
 
-    // fetch theo từng UID, gom lại
-    const perUid = {};
-    const all = [];
-    for (const uid of targetUids){
-      const q = new URL(API_ORDERS);
-      q.searchParams.set("limit", String(limit));
-      q.searchParams.set("orderListType", "ORDER");
-      q.searchParams.set("page", "1");
-      q.searchParams.set("uid", uid);
-
-      const resp = await fetch(q.toString(), { headers: BROWSER_HEADERS, cf: { cacheTtl: 10, cacheEverything: false }});
-      if (!resp.ok) continue;
-      const data = await resp.json().catch(()=>null);
-      if (data && data.success === true){
-        const rows = (data.data?.content || []).map(r=>({ ...r, _uid: uid }));
-        perUid[uid] = rows;
-        all.push(...rows);
-      } else {
-        perUid[uid] = [];
-      }
-    }
-
-    // de-dup theo orderId mới nhất
-    const byKey = new Map();
-    for (const o of all){
-      const key = o.orderId || o.id;
-      const prev = byKey.get(key);
-      const t = o.pageTime || o.openTime || 0;
-      if (!prev || t > (prev?.pageTime || prev?.openTime || 0)) byKey.set(key, o);
-    }
-    const merged = Array.from(byKey.values());
-    const normalizedAll = normalizeAndCompute(merged);
-    const snapshotAll = normalizedAll.map(pickSnapshotFields);
-
-    // lấy state cũ (gộp)
+    const { snapshotAll, normalizedAll } = await fetchForBootstrap(targetUids, limit);
     const state = await readGlobalState();
 
-    // bootstrap: lần đầu chỉ lưu, không gửi
+    // bootstrap lần đầu: chỉ lưu, không gửi
     if (!state.bootstrapped){
-      await writeGlobalState({ ordersById: Object.fromEntries(snapshotAll.map(x=>[x.id, x])), orderList: snapshotAll, lastFP: "", bootstrapped: true });
-      return new Response(JSON.stringify({ success:true, bootstrapped:true, data: normalizedAll }), { headers: corsHeaders() });
+      await writeGlobalState({
+        ordersById: Object.fromEntries(snapshotAll.map((x)=>[x.id, x])),
+        orderList: snapshotAll,
+        lastFP: "",
+        bootstrapped: true
+      });
+      return jsonRes(200, { success:true, bootstrapped:true, data: normalizedAll });
     }
 
     // diff tổng
     const diffs = diffOrders(state.orderList || [], snapshotAll);
     let blocks = [];
+
     if ((diffs.added?.length || diffs.changed?.length)){
       const fp = fingerprintDiffs(diffs);
       if (fp !== state.lastFP){
-        // nhóm theo traderUid cho Slack và chuẩn bị prices
-        const symbolsUS = snapshotAll.map(r=>r.symbolUS);
-        const prices = await getPricesForSymbols(context.request.url, symbolsUS, REQUIRED_KEY);
+        // chuẩn bị prices
+        const prices = await getPricesForSymbols(context.request.url, snapshotAll.map((r)=>r.symbolUS), REQUIRED_KEY);
 
+        // nhóm theo traderUid cho Slack
+        const fullMap = new Map(snapshotAll.map((x)=>[String(x.id), x]));
         const groups = new Map();
-        // map nhanh id->full snapshot
-        const fullMap = new Map(snapshotAll.map(x=>[String(x.id), x]));
 
-        for (const a of (diffs.added||[])){
+        (diffs.added||[]).forEach((a)=>{
           const uid = a.traderUid || "unknown";
           const g = groups.get(uid) || { name: a.trader || "", totalMargin: 0, rowsAdded: [], rowsChanged: [] };
           g.name = g.name || (a.trader || "");
           g.totalMargin += safeNum(a.margin);
           g.rowsAdded.push(a);
           groups.set(uid, g);
-        }
-        for (const c of (diffs.changed||[])){
+        });
+
+        (diffs.changed||[]).forEach((c)=>{
           const full = fullMap.get(String(c.id));
-          if (!full) continue;
+          if (!full) return;
           const uid = full.traderUid || "unknown";
           const g = groups.get(uid) || { name: full.trader || "", totalMargin: 0, rowsAdded: [], rowsChanged: [] };
           g.name = g.name || (full.trader || "");
           g.totalMargin += safeNum(full.margin);
-          g.rowsChanged.push({ ...c, _full: full });
+          g.rowsChanged.push({ _full: full });
           groups.set(uid, g);
-        }
+        });
 
         blocks = buildSlackBlocks({ groupedByTrader: groups, prices });
 
@@ -393,17 +409,13 @@ export async function onRequest(context){
     }
 
     // lưu snapshot mới (gộp)
-    state.ordersById = Object.fromEntries(snapshotAll.map(x=>[x.id, x]));
+    state.ordersById = Object.fromEntries(snapshotAll.map((x)=>[x.id, x]));
     state.orderList = snapshotAll;
     await writeGlobalState(state);
 
     // JSON response (đã có raw object cho từng row)
-    return new Response(JSON.stringify({ success:true, notified: blocks.length>0, data: normalizedAll }), {
-      headers: corsHeaders(),
-    });
+    return jsonRes(200, { success:true, notified: blocks.length>0, data: normalizedAll });
   } catch (e){
-    return new Response(JSON.stringify({ success:false, error: String(e && e.message ? e.message : e) }), {
-      status: 500, headers: corsHeaders()
-    });
+    return jsonRes(500, { success:false, error: String(e?.message || e) });
   }
 }
