@@ -70,6 +70,7 @@ function normalizeAndCompute(rows){
       openPrice,
       margin,
       notional,            // <<== thêm cột notional vào response
+      followers: o.followers,
       openAt: o.openTime || 0,
       openAtStr: tsVNT(o.openTime || 0),
       raw: o,              // <<== trả về raw object
