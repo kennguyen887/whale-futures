@@ -1,6 +1,6 @@
-// Cloudflare Pages Functions - /api/orders/notification
-// GET  /api/orders/notification?limit=10
-// TEST /api/orders/notification?testNotification=true   (preview từ cache, không fetch)
+// Cloudflare Pages Functions - /api/notification
+// GET  /api/notification?limit=10
+// TEST /api/notification?testNotification=true   (preview từ cache, không fetch)
 
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
