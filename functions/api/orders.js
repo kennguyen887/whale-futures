@@ -47,6 +47,11 @@ function tsVNT(t){
       }).replace(",", "")
     : "";
 }
+function marginPct(o) {
+  const m = Number(o.margin || 0);
+  const n = notional(o);
+  return n > 0 ? (m / n) * 100 : 0;
+}
 
 // ---------- Normalize (có traderUid, raw, notional) ----------
 function normalizeAndCompute(rows){
@@ -73,6 +78,7 @@ function normalizeAndCompute(rows){
       followers: o.followers,
       openAt: o.openTime || 0,
       openAtStr: tsVNT(o.openTime || 0),
+      marginPct: marginPct(o),
       raw: o,              // <<== trả về raw object
     };
   }).sort((a,b)=>b.openAt - a.openAt);
