@@ -220,7 +220,7 @@ function buildLinesWithMetrics(rows, priceMap){
     const roi = calcRoiPct(pnl, r.margin);
     const deltaPct = pctChangeVsOpen(r.openPrice, mp);
 
-    return `•${fmtMode(r.mode)} \`${r.symbol}\` x${r.lev} • ${fmtMarginType(r.marginMode)} • amount: *${fmt3(r.amount)}* • Open: *${fmt3(r.openPrice)}* • Mkt: *${fmt3(mp)}* • Δ: *${sign(deltaPct)}${fmt2(Math.abs(deltaPct))}%* • Notional: *${fmt3(r.openPrice*r.amount)} USDT* • Margin: *${fmt3(r.margin)} USDT* • PNL: *${fmt3(pnl)} USDT* • ROI: *${sign(roi)}${fmt2(Math.abs(roi))}%* • ${r.openAtStr} VNT`;
+    return `[${r.id}]•${fmtMode(r.mode)} \`${r.symbol}\` x${r.lev} • ${fmtMarginType(r.marginMode)} • amount: *${fmt3(r.amount)}* • Open: *${fmt3(r.openPrice)}* • Mkt: *${fmt3(mp)}* • Δ: *${sign(deltaPct)}${fmt2(Math.abs(deltaPct))}%* • Margin: \`${fmt3(r.margin)} USDT\` • Notional: *${fmt3(r.openPrice*r.amount)} USDT* • PNL: *${fmt3(pnl)} USDT* • ROI: *${sign(roi)}${fmt2(Math.abs(roi))}%* • ${r.openAtStr} VNT`;
   });
 }
 
