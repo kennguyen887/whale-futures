@@ -39,6 +39,7 @@ function marginUSDT(openAvgPrice, amount, lev, apiMargin){
   const n = safeNum(openAvgPrice) * safeNum(amount);
   return (safeNum(lev)||1) > 0 ? n / lev : 0;
 }
+
 function tsVNT(t){
   return t
     ? new Date(t).toLocaleString("en-GB", {
@@ -47,6 +48,11 @@ function tsVNT(t){
       }).replace(",", "")
     : "";
 }
+
+function notional(o) {
+  return Number(o.openAvgPrice || 0) * Number(o.amount || 0);
+}
+
 function marginPct(o) {
   const m = Number(o.margin || 0);
   const n = notional(o);
