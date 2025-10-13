@@ -117,7 +117,7 @@ export async function onRequest(context) {
 
     // fetch từng uid
     const all = [];
-    const JITTER_BASE = 160; // ms; tăng nếu server nhạy
+    const JITTER_BASE = 200; // ms; tăng nếu server nhạy
 
     await Promise.allSettled(
       uids.map(async (uid, i) => {
