@@ -1,7 +1,7 @@
 // Cloudflare Pages Functions - /api/orders/notification
 // GET  /api/orders/notification?limit=10
-// TEST /api/orders/notification?testNotification=true   (preview từ cache, auto-bootstrap nếu trống)
-// VIEW /api/orders/notification?inspectCache=true       (xem nhanh cache)
+// TEST /api/orders/notification?testNotification=true
+// VIEW /api/orders/notification?inspectCache=true
 
 const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
@@ -16,7 +16,6 @@ const BROWSER_HEADERS = {
   "Connection": "keep-alive",
 };
 
-// ---------- Utils ----------
 function corsHeaders() {
   return {
     "content-type": "application/json; charset=utf-8",
@@ -61,7 +60,6 @@ function tsVNT(t){
 }
 function sign(n){ return n>0?"+":(n<0?"-":""); }
 
-// ---------- Normalize ----------
 function normalizeAndCompute(rows){
   return rows.map((o)=>{
     const lev = leverageOf(o);
@@ -69,14 +67,14 @@ function normalizeAndCompute(rows){
     const amount = safeNum(o.amount);
     const margin = marginUSDT(openPrice, amount, lev, o.margin);
     const traderUid = String(o.uid ?? o.traderUid ?? o._uid ?? "");
-    const symbolUS = String(o.symbol || ""); // e.g. XRP_USDT
+    const symbolUS = String(o.symbol || "");
 
     return {
       id: o.orderId || o.id,
       trader: o.traderNickName || "",
       traderUid,
-      symbol: toPairNoUnderscore(symbolUS), // XRPUSDT
-      symbolUS, // XRP_USDT (gọi /api/prices)
+      symbol: toPairNoUnderscore(symbolUS),
+      symbolUS,
       mode: modeFromPositionType(o.positionType),
       lev,
       marginMode: marginModeFromOpenType(o.openType),
@@ -86,12 +84,11 @@ function normalizeAndCompute(rows){
       notional: openPrice * amount,
       openAt: o.openTime || 0,
       openAtStr: tsVNT(o.openTime || 0),
-      raw: o, // <<== trả về raw object
+      raw: o,
     };
   }).sort((a,b)=>b.openAt - a.openAt);
 }
 function pickSnapshotFields(n){
-  // snapshot để diff – KHÔNG chứa giá thị trường (market) để tránh spam theo biến động giá
   return {
     id: n.id,
     trader: n.trader || "",
@@ -109,13 +106,14 @@ function pickSnapshotFields(n){
   };
 }
 
-// ---------- State (Cache API, gộp một key) ----------
 const GLOBAL_CACHE_KEY = "https://cache.local/orders/__ALL__";
+const MAX_AGE_MS = 1000*60*60*24*7;
+const SEEN_CAP = 5000;
 
 async function readGlobalState(){
   const req = new Request(GLOBAL_CACHE_KEY);
   const res = await caches.default.match(req);
-  if (!res) return { ordersById: {}, orderList: [], lastFP: "", bootstrapped: false };
+  if (!res) return { ordersById: {}, orderList: [], lastFP: "", bootstrapped: false, seenIds: [] };
   try {
     const d = await res.json();
     return {
@@ -123,9 +121,10 @@ async function readGlobalState(){
       orderList: Array.isArray(d.orderList) ? d.orderList : [],
       lastFP: d.lastFP || "",
       bootstrapped: Boolean(d.bootstrapped),
+      seenIds: Array.isArray(d.seenIds) ? d.seenIds : [],
     };
   } catch {
-    return { ordersById: {}, orderList: [], lastFP: "", bootstrapped: false };
+    return { ordersById: {}, orderList: [], lastFP: "", bootstrapped: false, seenIds: [] };
   }
 }
 async function writeGlobalState(state){
@@ -135,6 +134,7 @@ async function writeGlobalState(state){
     orderList: state.orderList || [],
     lastFP: state.lastFP || "",
     bootstrapped: Boolean(state.bootstrapped),
+    seenIds: Array.isArray(state.seenIds) ? state.seenIds.slice(-SEEN_CAP) : [],
   };
   const res = new Response(JSON.stringify(payload), {
     headers: { "content-type": "application/json" }
@@ -142,21 +142,26 @@ async function writeGlobalState(state){
   await caches.default.put(req, res);
 }
 
-// ---------- Diff (only added & changed) ----------
-function diffOrders(prevList, currList){
+function diffOrders(prevList, currList, seenSet){
   const prevMap = new Map(prevList.map(p=>[String(p.id), p]));
+  const now = Date.now();
   const added = [];
   const changed = [];
 
   for (const c of currList){
-    const p = prevMap.get(String(c.id));
-    if (!p){ added.push(c); continue; }
+    const old = prevMap.get(String(c.id));
+    if (!old){
+      if (!seenSet.has(String(c.id)) && (now - safeNum(c.openAt)) <= MAX_AGE_MS) {
+        added.push(c);
+      }
+      continue;
+    }
     const ch = [];
-    if (safeNum(p.lev) !== safeNum(c.lev)) ch.push(`lev ${p.lev}→${c.lev}`);
-    if (safeNum(p.amount) !== safeNum(c.amount)) ch.push(`amount ${fmt3(p.amount)}→${fmt3(c.amount)}`);
-    if (safeNum(p.openPrice) !== safeNum(c.openPrice)) ch.push(`open ${fmt3(p.openPrice)}→${fmt3(c.openPrice)}`);
-    if (p.mode !== c.mode) ch.push(`mode ${p.mode}→${c.mode}`);
-    if (p.marginMode !== c.marginMode) ch.push(`marginMode ${p.marginMode}→${c.marginMode}`);
+    if (safeNum(old.lev) !== safeNum(c.lev)) ch.push(`lev ${old.lev}→${c.lev}`);
+    if (safeNum(old.amount) !== safeNum(c.amount)) ch.push(`amount ${fmt3(old.amount)}→${fmt3(c.amount)}`);
+    if (safeNum(old.openPrice) !== safeNum(c.openPrice)) ch.push(`open ${fmt3(old.openPrice)}→${fmt3(c.openPrice)}`);
+    if (old.mode !== c.mode) ch.push(`mode ${old.mode}→${c.mode}`);
+    if (old.marginMode !== c.marginMode) ch.push(`marginMode ${old.marginMode}→${c.marginMode}`);
     if (ch.length) changed.push({ id: c.id, symbol: c.symbol, mode: c.mode, changes: ch });
   }
   return { added, changed };
@@ -167,7 +172,6 @@ function fingerprintDiffs(d){
   return a.join(",")+"#"+c.join(",");
 }
 
-// ---------- Prices ----------
 async function getPricesForSymbols(contextUrl, symbolsUS = [], key = ""){
   if (!symbolsUS.length) return {};
   const base = new URL(contextUrl);
@@ -181,7 +185,6 @@ async function getPricesForSymbols(contextUrl, symbolsUS = [], key = ""){
   return (j && j.success && j.prices) ? j.prices : {};
 }
 
-// ---------- Slack ----------
 async function postSlack(env, text){
   const token = env.SLACK_BOT_TOKEN || "";
   const channel = env.SLACK_CHANNEL_ID || "C09JWCT503Y";
@@ -194,8 +197,6 @@ async function postSlack(env, text){
 }
 function fmtMode(mode){ if(mode==="long")return" *Long*"; if(mode==="short")return" *Short*"; return "❓"; }
 function fmtMarginType(m){ if(m==="Isolated")return":shield: Isolated"; if(m==="Cross")return":link: Cross"; return m||""; }
-
-// PNL/ROI helpers
 function calcPnl(mode, openPrice, marketPrice, amount){
   const diff = mode==="short" ? (openPrice - marketPrice) : (marketPrice - openPrice);
   return safeNum(diff) * safeNum(amount);
@@ -212,18 +213,15 @@ function pctChangeVsOpen(openPrice, marketPrice){
   return ((m - o) / o) * 100;
 }
 
-// Build Slack lines with required metrics
 function buildLinesWithMetrics(rows, priceMap){
   return rows.map(r=>{
     const mp = safeNum(priceMap[r.symbolUS] || 0);
     const pnl = calcPnl(r.mode, r.openPrice, mp, r.amount);
     const roi = calcRoiPct(pnl, r.margin);
     const deltaPct = pctChangeVsOpen(r.openPrice, mp);
-
     return `[${r.id}]•${fmtMode(r.mode)} \`${r.symbol}\` x${r.lev} • ${fmtMarginType(r.marginMode)} • amount: *${fmt3(r.amount)}* • Open: *${fmt3(r.openPrice)}* • Mkt: *${fmt3(mp)}* • Δ: *${sign(deltaPct)}${fmt2(Math.abs(deltaPct))}%* • Margin: \`${fmt3(r.margin)} USDT\` • Notional: *${fmt3(r.openPrice*r.amount)} USDT* • PNL: *${fmt3(pnl)} USDT* • ROI: *${sign(roi)}${fmt2(Math.abs(roi))}%* • ${r.openAtStr} VNT`;
   });
 }
-
 function buildSlackBlocks({ groupedByTrader, prices }){
   const blocks = [];
   for (const [uid, g] of groupedByTrader.entries()){
@@ -244,25 +242,26 @@ function buildSlackBlocks({ groupedByTrader, prices }){
   return blocks;
 }
 
-// ---------- Fetch helpers ----------
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+function jitter(min=60,max=180){ return Math.floor(Math.random()*(max-min+1))+min; }
+
 async function fetchForBootstrap(targetUids, limit){
-  const reqs = targetUids.map(async (uid) => {
+  const perUid = [];
+  for (const uid of targetUids){
+    await sleep(jitter());
     const q = new URL(API_ORDERS);
     q.searchParams.set("limit", String(limit));
     q.searchParams.set("orderListType", "ORDER");
     q.searchParams.set("page", "1");
     q.searchParams.set("uid", uid);
-
     const resp = await fetch(q.toString(), { headers: BROWSER_HEADERS, cf: { cacheTtl: 10, cacheEverything: false }});
-    if (!resp.ok) return [];
+    if (!resp.ok){ perUid.push({ uid, rows: [] }); continue; }
     const data = await resp.json().catch(()=>null);
-    return (data?.data?.content || []).map((r)=>({ ...r, _uid: uid }));
-  });
+    const rows = (data?.data?.content || []).map(r=>({ ...r, _uid: uid }));
+    perUid.push({ uid, rows });
+  }
 
-  const chunks = await Promise.all(reqs);
-  const all = chunks.flat();
-
-  // de-dup theo orderId mới nhất
+  const all = perUid.flatMap(x=>x.rows);
   const byKey = new Map();
   all.forEach((o)=>{
     const key = o.orderId || o.id;
@@ -270,22 +269,19 @@ async function fetchForBootstrap(targetUids, limit){
     const t = o.pageTime || o.openTime || 0;
     if (!prev || t > (prev?.pageTime || prev?.openTime || 0)) byKey.set(key, o);
   });
-
   const merged = Array.from(byKey.values());
   const normalizedAll = normalizeAndCompute(merged);
   const snapshotAll = normalizedAll.map(pickSnapshotFields);
-  return { snapshotAll, normalizedAll };
+  const okCount = perUid.filter(x=>x.rows.length>0).length;
+  return { snapshotAll, normalizedAll, okCount, perUidCount: perUid.length };
 }
 
-// ---------- Handlers ----------
 export async function onRequestOptions(){
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
 export async function onRequest(context){
   const { request, env } = context;
-
-  // Optional API key
   const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
   if (REQUIRED_KEY){
     const k = request.headers.get("x-api-key") || "";
@@ -302,80 +298,74 @@ export async function onRequest(context){
       .filter(Boolean);
     const limit = safeNum(url.searchParams.get("limit") || 10);
 
-    // ---- Inspect cache
     if (url.searchParams.get("inspectCache") === "true"){
       const state = await readGlobalState();
       return jsonRes(200, {
         success:true,
         bootstrapped: state.bootstrapped,
         count: state.orderList.length,
+        seen: state.seenIds.length,
         sample: state.orderList.slice(0,3),
       });
     }
 
-    // ---- TEST: preview từ cache (auto-bootstrap nếu rỗng)
     if (url.searchParams.get("testNotification") === "true"){
       let state = await readGlobalState();
-
       if (!state.orderList.length){
         if (!targetUids.length){
           return jsonRes(400, { success:false, error:"TARGET_UIDS is empty (cannot bootstrap in test mode)" });
         }
         const { snapshotAll } = await fetchForBootstrap(targetUids, limit);
-        state = { ordersById: Object.fromEntries(snapshotAll.map((x)=>[x.id, x])), orderList: snapshotAll, lastFP: "", bootstrapped: true };
+        state = { ordersById: Object.fromEntries(snapshotAll.map((x)=>[x.id, x])), orderList: snapshotAll, lastFP: "", bootstrapped: true, seenIds: snapshotAll.map(x=>String(x.id)).slice(-SEEN_CAP) };
         await writeGlobalState(state);
       }
-
       const prices = await getPricesForSymbols(context.request.url, state.orderList.map((o)=>o.symbolUS), REQUIRED_KEY);
-
-      // nhóm theo traderUid để hiển thị đẹp
       const groups = state.orderList.reduce((acc, r)=>{
         const uid = r.traderUid || "unknown";
         const g = acc.get(uid) || { name: r.trader || "", totalMargin: 0, rowsAdded: [], rowsChanged: [] };
         g.name = g.name || (r.trader || "");
         g.totalMargin += safeNum(r.margin);
-        g.rowsAdded.push(r); // preview như added
+        g.rowsAdded.push(r);
         acc.set(uid, g);
         return acc;
       }, new Map());
-
       const nowVNT = tsVNT(Date.now());
       const blocks = buildSlackBlocks({ groupedByTrader: groups, prices });
       await postSlack(env, [`✅ [TEST] Preview cache lúc ${nowVNT} VNT`, ...blocks].join("\n-------------\n"));
-
       return jsonRes(200, { success:true, message:"Preview sent from cache (auto-bootstrapped if empty)" });
     }
 
-    // ---- Normal flow: fetch + merge + diff + notify ----
     if (!targetUids.length){
       return jsonRes(400, { success:false, error:"TARGET_UIDS is empty" });
     }
 
-    const { snapshotAll, normalizedAll } = await fetchForBootstrap(targetUids, limit);
+    const { snapshotAll, normalizedAll, okCount, perUidCount } = await fetchForBootstrap(targetUids, limit);
     const state = await readGlobalState();
+    const seenSet = new Set(state.seenIds || []);
+    const degraded = okCount === 0 || (perUidCount >= 3 && okCount/perUidCount < 0.5) || (state.orderList.length>0 && snapshotAll.length < Math.floor(state.orderList.length*0.25));
 
-    // bootstrap lần đầu: chỉ lưu, không gửi
     if (!state.bootstrapped){
       await writeGlobalState({
         ordersById: Object.fromEntries(snapshotAll.map((x)=>[x.id, x])),
         orderList: snapshotAll,
         lastFP: "",
-        bootstrapped: true
+        bootstrapped: true,
+        seenIds: snapshotAll.map(x=>String(x.id)).slice(-SEEN_CAP)
       });
-      return jsonRes(200, { success:true, bootstrapped:true, data: normalizedAll });
+      return jsonRes(200, { success:true, bootstrapped:true, data: normalizedAll, degraded:false });
     }
 
-    // diff tổng
-    const diffs = diffOrders(state.orderList || [], snapshotAll);
+    if (degraded){
+      return jsonRes(200, { success:true, notified:false, degraded:true, reason:"Upstream likely rate-limited/blocked", data: [] });
+    }
+
+    const diffs = diffOrders(state.orderList || [], snapshotAll, seenSet);
     let blocks = [];
 
     if ((diffs.added?.length || diffs.changed?.length)){
       const fp = fingerprintDiffs(diffs);
       if (fp !== state.lastFP){
-        // chuẩn bị prices
         const prices = await getPricesForSymbols(context.request.url, snapshotAll.map((r)=>r.symbolUS), REQUIRED_KEY);
-
-        // nhóm theo traderUid cho Slack
         const fullMap = new Map(snapshotAll.map((x)=>[String(x.id), x]));
         const groups = new Map();
 
@@ -400,21 +390,20 @@ export async function onRequest(context){
         });
 
         blocks = buildSlackBlocks({ groupedByTrader: groups, prices });
-
         if (blocks.length){
           await postSlack(env, blocks.join("\n-------------\n"));
         }
         state.lastFP = fp;
+        const newlySeen = (diffs.added||[]).map(x=>String(x.id));
+        state.seenIds = [...seenSet, ...newlySeen].slice(-SEEN_CAP);
       }
     }
 
-    // lưu snapshot mới (gộp)
     state.ordersById = Object.fromEntries(snapshotAll.map((x)=>[x.id, x]));
     state.orderList = snapshotAll;
     await writeGlobalState(state);
 
-    // JSON response (đã có raw object cho từng row)
-    return jsonRes(200, { success:true, notified: blocks.length>0, data: normalizedAll });
+    return jsonRes(200, { success:true, notified: blocks.length>0, degraded:false, data: normalizedAll });
   } catch (e){
     return jsonRes(500, { success:false, error: String(e?.message || e) });
   }
