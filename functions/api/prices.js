@@ -25,7 +25,7 @@ function corsHeaders() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function fetchJSON(url, { headers = {}, timeoutMs = 5000 } = {}) {
+async function fetchJSON(url, { headers = {}, timeoutMs = 6000 } = {}) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort("timeout"), timeoutMs);
   try {
@@ -42,23 +42,19 @@ async function fetchWithRetry(url, opts = {}, retries = 1) {
     return await fetchJSON(url, opts);
   } catch (e) {
     if (retries <= 0) throw e;
-    // backoff ngắn để tránh 429
     await sleep(200 + Math.floor(Math.random() * 200));
     return fetchWithRetry(url, opts, retries - 1);
   }
 }
 
-// Build maps 1 lần / request
 async function getFuturesMap() {
-  // Không truyền symbol → trả về danh sách đầy đủ
   const json = await fetchWithRetry(FUTURES_TICKER_API, {
     headers: BROWSER_HEADERS,
     timeoutMs: 6000,
   });
-  const arr = Array.isArray(json?.data) ? json.data : (json?.data ? [json.data] : []);
+  const arr = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : [];
   const map = new Map();
   for (const it of arr) {
-    // symbol dạng "BTC_USDT"
     const sym = it?.symbol;
     const p = Number(it?.lastPrice || it?.fairPrice || it?.indexPrice || 0);
     if (sym && p > 0) map.set(sym, p);
@@ -67,23 +63,28 @@ async function getFuturesMap() {
 }
 
 async function getSpotMap() {
-  // Không truyền symbol → trả về toàn bộ cặp spot
   const json = await fetchWithRetry(SPOT_TICKER_API, {
     headers: BROWSER_HEADERS,
     timeoutMs: 6000,
   });
-  const arr = Array.isArray(json) ? json : (json ? [json] : []);
+  const arr = Array.isArray(json) ? json : json ? [json] : [];
   const map = new Map();
   for (const it of arr) {
-    const sym = it?.symbol; // "BTCUSDT"
+    const sym = it?.symbol;
     const p = Number(it?.price || 0);
     if (sym && p > 0) map.set(sym, p);
   }
   return map;
 }
 
-function toSpotSymbol(symUnderscore = "") {
-  return symUnderscore.replace("_", ""); // "XRP_USDT" -> "XRPUSDT"
+function toFuturesSymbol(s = "") {
+  if (s.includes("_")) return s;
+  if (s.endsWith("USDT")) return `${s.slice(0, -4)}_USDT`;
+  return s;
+}
+
+function toSpotSymbol(s = "") {
+  return s.replace("_", "");
 }
 
 export async function onRequestOptions() {
@@ -97,7 +98,6 @@ function jsonRes(status, data) {
 export async function onRequest(context) {
   const { request, env } = context;
 
-  // API key check
   const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
   if (REQUIRED_KEY) {
     const clientKey = request.headers.get("x-api-key") || "";
@@ -108,47 +108,59 @@ export async function onRequest(context) {
 
   try {
     const url = new URL(request.url);
+    const wantDebug = url.searchParams.get("debug") === "1";
     const list = (url.searchParams.get("symbols") || "")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-
     const unique = [...new Set(list)];
+    if (unique.length === 0) return jsonRes(200, { success: true, prices: {} });
 
-    // Batch fetch 1 lần để tránh rate limit/miss
-    // Nếu 1 trong 2 API lỗi, vẫn cố dùng cái còn lại
     let futuresMap = new Map();
     let spotMap = new Map();
-
     try {
       futuresMap = await getFuturesMap();
-    } catch (_) {
-      // ignore
-    }
+    } catch {}
     try {
       spotMap = await getSpotMap();
-    } catch (_) {
-      // ignore
-    }
+    } catch {}
 
     const prices = {};
-    for (const sym of unique) {
-      // Ưu tiên futures (X_Y), fallback spot (XY)
-      const f = futuresMap.get(sym);
+    const notFound = [];
+
+    for (const raw of unique) {
+      const fKey = toFuturesSymbol(raw);
+      const sKey = toSpotSymbol(raw);
+
+      const f = futuresMap.get(fKey);
       if (typeof f === "number" && f > 0) {
-        prices[sym] = f;
+        prices[raw] = f;
         continue;
       }
-      const spotSym = toSpotSymbol(sym);
-      const s = spotMap.get(spotSym);
+
+      const s = spotMap.get(sKey);
       if (typeof s === "number" && s > 0) {
-        prices[sym] = s;
+        prices[raw] = s;
         continue;
       }
-      // Không tìm thấy → bỏ qua (giữ API gọn: chỉ trả những cặp có giá)
+
+      const f2 = futuresMap.get(raw);
+      if (typeof f2 === "number" && f2 > 0) {
+        prices[raw] = f2;
+        continue;
+      }
+
+      const s2 = spotMap.get(raw);
+      if (typeof s2 === "number" && s2 > 0) {
+        prices[raw] = s2;
+        continue;
+      }
+
+      notFound.push(raw);
     }
 
-    return jsonRes(200, { success: true, prices });
+    const payload = wantDebug ? { success: true, prices, notFound } : { success: true, prices };
+    return jsonRes(200, payload);
   } catch (e) {
     return jsonRes(500, { success: false, error: String(e?.message || e) });
   }
