@@ -1,25 +1,18 @@
 // Cloudflare Pages Functions - /api/orders
 // GET /api/orders?uids=1,2,3&limit=10
-// - Không dùng cache
-// - Không có testNotification
 
-const API_ORDERS = "https://www.mexc.com/api/platform/futures/copyFutures/api/v1/trader/orders/v2";
+const API_ORDERS = "https://futures.mexc.com/copyFutures/api/v1/trader/orders/v2";
 
 const BROWSER_HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept": "application/json, text/plain, */*",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json,text/plain,*/*",
   "Accept-Language": "en-US,en;q=0.9",
-  "Referer": "https://www.mexc.com/",
-  "Origin": "https://www.mexc.com",
-  "Connection": "keep-alive",
 };
 
 const DEFAULT_UIDS =
   "34988691,02058392,83769107,47991559,82721272,89920323,92798483,72432594,87698388,31866177,49787038,45227412,80813692,27337672,95927229,71925540,38063228,47395458,78481146,89070846,01249789,87698388,57343925,74785697,21810967,22247145,88833523,40133940,84277140,93640617,76459243,48673493,13290625,48131784,23747691,89989257,69454560,52543521,07867898,36267959,90901845,27012439,58298982,72486517,30339263,49140673,20393898,93765871,98086898,81873060,08796342";
 
-// ---------- Utils ----------
 function corsHeaders() {
   return {
     "content-type": "application/json; charset=utf-8",
@@ -33,33 +26,11 @@ function toPair(s = "") { return String(s).replace("_", ""); }
 function modeFromPositionType(pt) { if (pt === 1) return "long"; if (pt === 2) return "short"; return "unknown"; }
 function marginModeFromOpenType(ot) { if (ot === 1) return "Isolated"; if (ot === 2) return "Cross"; return "Unknown"; }
 function leverageOf(o) { return safeNum(o.leverage ?? o.lev ?? o.openLeverage ?? o?.raw?.leverage) || 1; }
-function marginUSDT(openAvgPrice, amount, lev, apiMargin) {
-  const m = safeNum(apiMargin);
-  if (m > 0) return m;
-  const n = safeNum(openAvgPrice) * safeNum(amount);
-  return (safeNum(lev) || 1) > 0 ? n / lev : 0;
-}
+function marginUSDT(openAvgPrice, amount, lev, apiMargin) { const m = safeNum(apiMargin); if (m > 0) return m; const n = safeNum(openAvgPrice) * safeNum(amount); return (safeNum(lev) || 1) > 0 ? n / lev : 0; }
+function tsVNT(t) { return t ? new Date(t).toLocaleString("en-GB",{timeZone:"Asia/Ho_Chi_Minh",hour12:false}).replace(",","") : ""; }
+function notional(o) { return Number(o.openAvgPrice || 0) * Number(o.amount || 0); }
+function marginPct(o) { const m = Number(o.margin || 0); const n = notional(o); return n > 0 ? (m / n) * 100 : 0; }
 
-function tsVNT(t) {
-  return t
-    ? new Date(t).toLocaleString("en-GB", {
-      timeZone: "Asia/Ho_Chi_Minh",
-      hour12: false
-    }).replace(",", "")
-    : "";
-}
-
-function notional(o) {
-  return Number(o.openAvgPrice || 0) * Number(o.amount || 0);
-}
-
-function marginPct(o) {
-  const m = Number(o.margin || 0);
-  const n = notional(o);
-  return n > 0 ? (m / n) * 100 : 0;
-}
-
-// ---------- Normalize (có traderUid, raw, notional) ----------
 function normalizeAndCompute(rows) {
   return rows.map((o) => {
     const lev = leverageOf(o);
@@ -67,8 +38,7 @@ function normalizeAndCompute(rows) {
     const amount = safeNum(o.amount);
     const margin = marginUSDT(openPrice, amount, lev, o.margin);
     const traderUid = String(o.uid ?? o.traderUid ?? o._uid ?? "");
-    const notional = openPrice * amount;
-
+    const notionalVal = openPrice * amount;
     return {
       id: o.orderId || o.id,
       trader: o.traderNickName || "",
@@ -80,25 +50,22 @@ function normalizeAndCompute(rows) {
       amount,
       openPrice,
       margin,
-      notional,            // <<== thêm cột notional vào response
+      notional: notionalVal,
       followers: o.followers,
       openAt: o.openTime || 0,
       openAtStr: tsVNT(o.openTime || 0),
       marginPct: marginPct(o),
-      raw: o,              // <<== trả về raw object
+      raw: o,
     };
   }).sort((a, b) => b.openAt - a.openAt);
 }
 
-// ---------- Handlers ----------
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
 export async function onRequest(context) {
   const { request, env } = context;
-
-  // Optional API key
   const REQUIRED_KEY = env.INTERNAL_API_KEY || "";
   if (REQUIRED_KEY) {
     const k = request.headers.get("x-api-key") || "";
@@ -115,14 +82,12 @@ export async function onRequest(context) {
     const limit = safeNum(url.searchParams.get("limit") || 50);
     const uids = String(uidsStr || "").split(",").map((x) => (x || "").trim()).filter(Boolean);
 
-    // fetch từng uid
     const all = [];
-    const JITTER_BASE = 200; // ms; tăng nếu server nhạy
+    const JITTER_BASE = 60;
 
     await Promise.allSettled(
       uids.map(async (uid, i) => {
-        // dàn nhịp thật mỏng, gần như không ảnh hưởng tốc độ tổng
-        const wait = (i % 6) * JITTER_BASE + Math.floor(Math.random() * 40);
+        const wait = (i % 6) * JITTER_BASE + Math.floor(Math.random() * 30);
         if (wait) await new Promise(r => setTimeout(r, wait));
 
         const q = new URL(API_ORDERS);
@@ -132,18 +97,18 @@ export async function onRequest(context) {
         q.searchParams.set("uid", uid);
 
         const resp = await fetch(q.toString(), { headers: BROWSER_HEADERS, cf: { cacheEverything: false } });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          const txt = await resp.text().catch(()=> "");
+          console.warn("MEXC non-OK", resp.status, resp.statusText, txt.slice(0,200));
+          return;
+        }
 
-        const data = await resp.json().catch(() => null);
+        const data = await resp.json().catch((e)=> { console.warn("JSON parse error", e); return null; });
         const rows = data?.success === true ? (data.data?.content || []) : [];
         rows.forEach(r => all.push({ ...r, _uid: uid }));
       })
     );
 
-    // all => kết quả
-
-
-    // de-dup theo orderId mới nhất (ưu tiên pageTime, fallback openTime)
     const byKey = new Map();
     for (const o of all) {
       const key = o.orderId || o.id;
