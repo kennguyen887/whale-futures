@@ -46,12 +46,14 @@ Mục tiêu: Tạo report “Top kèo nóng (tinh gọn, có icon & lý do)” t
 
 Top kèo nóng (tinh gọn, có icon & lý do):
 
-SOLUSDT — 🔥 35 lệnh/10m · 💰 ~8,322.3k notional · ⚖️ 92x TB · ↔️ -0.22% · ⏱️ 21:06:26  
-👥 Traders: Masters at Coin (#61698494), Mexctrader-9NLMP3 (#30339263), 27*****2 (#27337672)…  
+SOLUSDT — 🔥 35 lệnh/10m · 💰 ~8,322.3k notional · ⚖️ 92x TB · ↔️ -0.22% · ⏱️ từ 5 giây đến 4 tiếng 30 phút trước 
+👥 Traders: Masters at Coin (#61698494), Mexctrader-9NLMP3 (#30339263), 27*****2 (#27337672)… 
+↗️ ID lệnh: 18313020, 67429135, 82874560… 
 ✅ Lý do: dòng tiền đổ vào rất mạnh (pile-in), notional lớn, đòn bẩy cao ⇒ kèo “nóng tay”.
 
-BTCUSDT — 🔥 12 lệnh/10m · 💰 ~2,486.5k notional · ⚖️ 61x TB · ↔️ +0.13% · ⏱️ 20:58:15  
+BTCUSDT — 🔥 12 lệnh/10m · 💰 ~2,486.5k notional · ⚖️ 61x TB · ↔️ +0.13% · ⏱️ từ 2phút đến 3 tiếng 30 phút trước 
 👥 Traders: 82*****0 (#82874560), Mexctrader-LeA89w (#18313020), WAVE SURFER (#67429135)…  
+↗️ ID lệnh: 18313020, 67429135, 82874560… 
 ✅ Lý do: nhiều lệnh đồng thời + notional cao ⇒ độ tin cậy tốt để copy theo dòng.
 
 ---
@@ -65,6 +67,7 @@ BTCUSDT — 🔥 12 lệnh/10m · 💰 ~2,486.5k notional · ⚖️ 61x TB · �
   - ⚖️ trung bình leverage (Avg Lev)
   - ↔️ trung bình Δ % vs Open
   - ⏱️ thời gian lệnh mới nhất
+  - tính xem có bao nhiêu VIP traders (followers > 1000 và có ⭐).
 - Ghi rõ **Top traders** (3–5 người đầu, có UID).
 - Thêm **Lý do ngắn gọn, tự động** dựa trên dữ liệu:
   - Nếu entries > 5 ⇒ “dòng tiền đổ vào mạnh”
