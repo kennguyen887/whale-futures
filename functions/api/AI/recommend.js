@@ -40,10 +40,10 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV) chỉ chọn ra những lệnh đáng để để copy trade theo những điều kiện sau:
+Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV) và chọn ra coin nào đáng để copy trade theo những điều kiện sau:
 
 Điều kiện chọn lệnh:
-- Dựa vào kiến thức của bạn, chọn ra những lệnh đáng để copy nhất, ưu tiên chọn thời gian mở lệnh ≤ 2 giờ.
+- Dựa vào kiến thức của bạn, chọn ra những coin đáng để copy nhất, ưu tiên chọn thời gian mở lệnh ≤ 2 giờ.
 - Ghi rõ độ an toàn, mức độ hoạt động, và tiềm năng.
 - Phân tích kèo nào tiềm năng phù hợp "ngâm" lệnh lâu dài vài tháng hay cả năm, ăn lớn.
 - Cân nhắc traders VIP mà được đánh icon "⭐", xem họ có vào lệnh chuẩn không
@@ -51,7 +51,7 @@ Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệ
 
 
 ### 📊 Đầu ra yêu cầu
-Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể ID lệnh có từ CSV, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
+Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể những ID lệnh và trader name, trader id, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
