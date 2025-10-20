@@ -43,8 +43,8 @@ export const onRequestPost = async (context) => {
 Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV/JSON) chỉ chọn ra những lệnh tối ưu nhất để copy trade theo những điều kiện sau:
 
 Điều kiện chọn lệnh:
-- Chấm điểm **CopyScore (0–100)** cho từng lệnh dựa trên độ an toàn, mức độ hoạt động, và tiềm năng.
-- Phát hiện **tín hiệu cảnh báo (Alert)** nếu trader có hành vi bất thường hoặc cơ hội mới xuất hiện.
+- Dựa vào kiến thức mà bạn đang có về thị trường crypto, các loại coin, và hành vi trader chuyên nghiệp.
+- (điều kiện không quan trọng để quyết định) Chấm điểm **CopyScore (0–100)** cho từng lệnh dựa trên độ an toàn, mức độ hoạt động, và tiềm năng.
 - Phân tích kèo nào tiềm năng phù hợp "ngâm" lệnh lâu dài vài tháng hay cả năm, ăn lớn.
 - Cân nhắc traders VIP mà được đánh icon "⭐", xem họ có vào lệnh chuẩn không
 ---
@@ -63,14 +63,11 @@ Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệ
 Phân loại:
 - ≥ 85: “🔥 Kèo VIP – có thể copy ngay”
 - 70–84: “🟢 Tốt – vào vừa phải”
-- 55–69: “⚠️ Theo dõi thêm”
-- < 55: “❌ Bỏ qua”
-
 
 ---
 
 ### 📊 Đầu ra yêu cầu
-Hãy trả về duy nhất **Markdown**, ngắn gọn, dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
+Hãy trả về duy nhất **Markdown**, ngắn gọn, cho  cụ thể gồm ID lệnh, trader name, trader ID, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
