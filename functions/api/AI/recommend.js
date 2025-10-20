@@ -40,18 +40,40 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV) và chọn ra coin nào đáng để copy trade theo những điều kiện sau:
+Phân tích file CSV gồm các lệnh copy trade (trường như: Trader, Symbol, Lev, Margin Mode, PNL, ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID).
 
-Điều kiện chọn lệnh:
-- Dựa vào kiến thức của bạn, chọn ra những coin đáng để copy nhất, ưu tiên chọn thời gian mở lệnh ≤ 2 giờ.
-- Ghi rõ độ an toàn, mức độ hoạt động, và tiềm năng.
-- Phân tích kèo nào tiềm năng phù hợp "ngâm" lệnh lâu dài vài tháng hay cả năm, ăn lớn.
-- Cân nhắc traders VIP mà được đánh icon "⭐", xem họ có vào lệnh chuẩn không
+Mục tiêu: Tạo report “Top kèo nóng (tinh gọn, có icon & lý do)” theo đúng format sau:
+
+Top kèo nóng (tinh gọn, có icon & lý do):
+
+SOLUSDT — 🔥 35 lệnh/10m · 💰 ~8,322.3k notional · ⚖️ 92x TB · ↔️ -0.22% · ⏱️ 21:06:26  
+👥 Traders: Masters at Coin (#61698494), Mexctrader-9NLMP3 (#30339263), 27*****2 (#27337672)…  
+✅ Lý do: dòng tiền đổ vào rất mạnh (pile-in), notional lớn, đòn bẩy cao ⇒ kèo “nóng tay”.
+
+BTCUSDT — 🔥 12 lệnh/10m · 💰 ~2,486.5k notional · ⚖️ 61x TB · ↔️ +0.13% · ⏱️ 20:58:15  
+👥 Traders: 82*****0 (#82874560), Mexctrader-LeA89w (#18313020), WAVE SURFER (#67429135)…  
+✅ Lý do: nhiều lệnh đồng thời + notional cao ⇒ độ tin cậy tốt để copy theo dòng.
+
 ---
 
-
-### 📊 Đầu ra yêu cầu
-Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể những ID lệnh và trader name, trader id, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
+**Yêu cầu cụ thể:**
+- Chỉ tính lệnh mở trong **10 phút gần nhất** (theo “Open At (VNT)”).
+- Gom nhóm theo **Symbol**.
+- Tính:
+  - 🔥 số lượng lệnh (entries)
+  - 💰 tổng notional (Σ Notional)
+  - ⚖️ trung bình leverage (Avg Lev)
+  - ↔️ trung bình Δ % vs Open
+  - ⏱️ thời gian lệnh mới nhất
+- Ghi rõ **Top traders** (3–5 người đầu, có UID).
+- Thêm **Lý do ngắn gọn, tự động** dựa trên dữ liệu:
+  - Nếu entries > 5 ⇒ “dòng tiền đổ vào mạnh”
+  - Nếu leverage > 80 ⇒ “đòn bẩy cao, rủi ro ↗️”
+  - Nếu Δ % < 0 ⇒ “đang điều chỉnh nhẹ”
+  - Nếu Δ % > 0 ⇒ “đang bật trend dương”
+  - Nếu notional > trung bình toàn bảng ⇒ “volume lớn, đáng chú ý”
+- Giữ format Markdown, có emoji và icon rõ ràng.
+- Sắp xếp theo độ nóng giảm dần (entries và notional).
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
