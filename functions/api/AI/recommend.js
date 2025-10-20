@@ -46,7 +46,8 @@ Mục tiêu:
 - Phân tích danh sách lệnh (CSV/JSON).
 - Chấm điểm **CopyScore (0–100)** cho từng lệnh dựa trên độ an toàn, mức độ hoạt động, và tiềm năng.
 - Phát hiện **tín hiệu cảnh báo (Alert)** nếu trader có hành vi bất thường hoặc cơ hội mới xuất hiện.
-- Phân tích kèo nào tiềm năng nên vào lệnh dần dần, đi lâu dài vài tháng hay cả năm. 
+- Phân tích kèo nào tiềm năng nên vào lệnh dần dần, đi lâu dài vài tháng hay cả năm.
+- Cân nhắc traders VIP mà được đánh icon "⭐", xem họ có vào lệnh chuẩn không
 ---
 
 ### ⚙️ Cách tính CopyScore
