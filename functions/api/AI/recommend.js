@@ -67,7 +67,7 @@ Phân loại:
 ---
 
 ### 📊 Đầu ra yêu cầu
-Hãy trả về duy nhất **Markdown**, ngắn gọn, cho  cụ thể gồm ID lệnh, trader name, trader ID, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
+Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể gồm ID lệnh, trader name, trader ID, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
