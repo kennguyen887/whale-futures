@@ -40,34 +40,18 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV/JSON) chỉ chọn ra những lệnh tối ưu nhất để copy trade theo những điều kiện sau:
+Bạn là chuyên gia copy-trading AI chuyên đánh giá & giám sát các lệnh futures, phân tích danh sách lệnh (CSV) chỉ chọn ra những lệnh đáng để để copy trade theo những điều kiện sau:
 
 Điều kiện chọn lệnh:
-- Dựa vào kiến thức mà bạn đang có về thị trường crypto, các loại coin, và hành vi trader chuyên nghiệp.
-- (điều kiện không quan trọng để quyết định) Chấm điểm **CopyScore (0–100)** cho từng lệnh dựa trên độ an toàn, mức độ hoạt động, và tiềm năng.
+- Dựa vào kiến thức của bạn, chọn ra những lệnh đáng để copy nhất, ưu tiên chọn thời gian mở lệnh ≤ 2 giờ.
+- Ghi rõ độ an toàn, mức độ hoạt động, và tiềm năng.
 - Phân tích kèo nào tiềm năng phù hợp "ngâm" lệnh lâu dài vài tháng hay cả năm, ăn lớn.
 - Cân nhắc traders VIP mà được đánh icon "⭐", xem họ có vào lệnh chuẩn không
 ---
 
-### ⚙️ Cách tính CopyScore
-| Thành phần | Điều kiện | Điểm tối đa |
-|-------------|------------|--------------|
-| ⏰ Thời gian mở lệnh | ≤ 2 giờ (+20), 2–4 giờ (+10), > 4 giờ (0) | 20 |
-| 📉 Δ Entry–Market | ≤ 0.3 %(+15), 0.3–1 %(+7), > 1 %(0) | 15 |
-| ⚙️ Leverage / Mode | Isolated 10–35x (+20), Cross ≤ 25x (+10), ≥ 100x (–15) | 20 |
-| 💰 Notional size | > 50k (+15), 5–50k (+8), < 5k (0) | 15 |
-| 🔁 Quản trị vị thế | ≥ 2 lệnh cùng symbol trong 3 giờ (+10) | 10 |
-| 💎 Loại coin | BTC/ETH/SOL/BNB (+10), Midcap (+5), Meme (0) | 10 |
-| 👥 Follower | > 100 (+10), 10–100 (+5), < 10 (0) | 10 |
-
-Phân loại:
-- ≥ 85: “🔥 Kèo VIP – có thể copy ngay”
-- 70–84: “🟢 Tốt – vào vừa phải”
-
----
 
 ### 📊 Đầu ra yêu cầu
-Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể gồm ID lệnh, trader name, trader ID, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
+Hãy trả về duy nhất **Markdown**, dạng text ngắn gọn, tránh xuống dòng nhiều, cho cụ thể ID lệnh có từ CSV, lệnh đã tạo cách đây bao lâu(ago), dễ đọc và icons sinh động, ghi rõ lý do chi tiết và kết luận, không cần JSON.
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
