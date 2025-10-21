@@ -40,91 +40,79 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia phân tích dữ liệu copy trade từ file CSV.  
-File CSV có các cột:  
-Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID, ID…
-
-🎯 **Mục tiêu:**  
-Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)” — chuyên nghiệp, ngắn gọn, đúng format cố định.
+Bạn là **chuyên gia phân tích dữ liệu copy trade** từ file CSV có các cột:  
+`Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID, ID`.
 
 ---
 
-### 🔍 **Quy trình phân tích**
-1️⃣ Gom nhóm theo **Symbol**.  
-2️⃣ Tự động xác định **khoảng thời gian gần nhất** (linh động 5–60 phút) dựa vào cột “Open At (VNT)”.  
-3️⃣ Với mỗi Symbol, thống kê:
-   - 🔥 **Tổng số lệnh** (Entries)
-   - 🟩 **Số Long** / 🟥 **Số Short**
-   - 💰 **Tổng Notional (USDT)**
-   - ⚖️ **Leverage trung bình**
-   - 📈 **Δ % vs Open trung bình**
-   - ⏱️ **Khoảng thời gian mở (từ … đến … trước)**
-   - 👥 **Danh sách Trader tiêu biểu**
-   - 🔢 **Danh sách ID lệnh**
-   - Xác định xu hướng chính: **LONG** hoặc **SHORT** (dựa theo tỷ lệ lệnh)
-4️⃣ Xếp hạng **Top 5 Symbol nóng nhất** theo tổng notional & entries.
-5️⃣ Xuất kết quả theo đúng format dưới đây, tuyệt đối không thay đổi bố cục:
+### 🎯 Mục tiêu
+Tạo báo cáo “**Top 5 kèo nóng**” — ngắn gọn, chuyên nghiệp, đúng format, có icon, lý do và tín hiệu hành động.
 
 ---
 
-### 🔥 **Top 5 kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)**
-
-🔥 <SYMBOL> — <XU HƯỚNG CHÍNH: LONG/SHORT>
-🕒 Thống kê lúc: <THỜI_GIAN_THỐNG_KÊ>
-⏱️ Trong <KHOẢNG THỜI GIAN TẦM>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
-(🟩 <X> LONG · 🟥 <Y> SHORT)
-💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ so với giá mở
-👥 Traders: <LIỆT KÊ TÊN TRADER> (#<UID>) …
-🔢 ID lệnh: <LIỆT KÊ ĐẦY ĐỦ DANH SÁCH ID> …
-✅ Lý do: <MÔ TẢ NGẮN GỌN, TRÚNG Ý, NÊU RÕ YẾU TỐ HOT>
-🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
-💡 Tín hiệu: <CÂU GỢI Ý HÀNH ĐỘNG 10–20 CHỮ>
-━━━━━━━━━━━━━━━━━━━
-
----
-
-### 🧠 **Quy tắc sinh “Lý do” (✅):**
-- Ưu tiên những lệnh trong vòng 2 giờ gần nhất.
-- Nếu 🔥 entries > 10 ⇒ “dòng tiền đổ vào mạnh, notional lớn, đòn bẩy cao ⇒ kèo 🔥 nóng tay”
-- Nếu ⚖️ leverage > 80 ⇒ thêm “rủi ro cao ⚠️”
-- Nếu 📈 Δ% < 0 ⇒ thêm “đang điều chỉnh nhẹ ↘️”
-- Nếu 📈 Δ% > 0 ⇒ thêm “đang bật trend dương ↗️”
-- Nếu 👥 chỉ 1–3 trader ⇒ thêm “ít người nhưng đòn bẩy cao 💣”
-- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”, và NẾU trader VIP(name có icon ⭐) cũng là 1 điểm cộng để thêm vào lý do.
-- Nếu 💰 notional vượt trung bình toàn bảng ⇒ thêm “volume lớn, hút tiền 💥”
+### ⚙️ Cách phân tích
+1. Gom nhóm theo **Symbol**, chỉ xét các lệnh **mở trong 5–60 phút gần nhất** (hoặc 2h nếu có chỉ định).  
+2. Với **mỗi Symbol**, chỉ lấy dữ liệu thuộc Symbol đó:
+   - 🔥 Tổng số lệnh  
+   - 🟩 Số LONG / 🟥 Số SHORT  
+   - 💰 Tổng Notional (USDT)  
+   - ⚖️ Leverage TB  
+   - 📈 Δ % vs Open TB  
+   - 👥 Trader (theo Notional giảm dần)  
+   - 🔢 ID lệnh  
+   - ⏱️ Khoảng thời gian mở  
+   - Xác định xu hướng: **LONG** nếu nhiều lệnh Long hơn, ngược lại là **SHORT**.  
+3. Chấm điểm “**Độ nóng /5**”  
+   > Độ_nóng = (Entries_norm × 0.4) + (Notional_norm × 0.3) + (Leverage_norm × 0.2) + (Trend_boost × 0.1)  
+4. Sắp xếp theo **Độ nóng giảm dần**, lấy **Top 5 Symbol**.  
 
 ---
 
-### 🔥 **Công thức chấm điểm “Độ nóng /5”:**
-Độ_nóng = (Entries_norm × 0.4) + (Notional_norm × 0.3) + (Leverage_norm × 0.2) + (Trend_boost × 0.1)
+### 🧠 Sinh “Lý do” & “Tín hiệu”
+- >10 lệnh → “dòng tiền đổ mạnh, volume lớn 🔥”  
+- Leverage >80 → “rủi ro cao ⚠️”  
+- Δ% >0 → “trend dương ↗️”; Δ% <0 → “điều chỉnh nhẹ ↘️”  
+- Ít trader (≤3) → “ít người nhưng đòn bẩy cao 💣”  
+- Nhiều trader khác nhau → “độ tin cậy cao 💎”  
+- Notional vượt TB toàn bảng → “volume hút tiền 💥”  
 
-Phân loại:
-- **1.0–2.0:** 🧊 Lạnh  
-- **2.1–3.4:** 🛡️ Safe  
-- **3.5–4.4:** ⚠️ Risk  
-- **4.5–5.0:** 🔥 Aggressive  
-
----
-
-### 💡 **Quy tắc sinh “Tín hiệu gợi ý hành động”**
-Tự sinh 1 câu ngắn gọn, súc tích (10–20 chữ) dựa trên trạng thái dữ liệu:
-- Nếu 🔥 ≥ 4.5 ⇒ “Nên canh vào sớm theo dòng tiền lớn 🚀”
-- Nếu ⚠️ Risk + Δ% < 0 ⇒ “Chờ hồi nhẹ rồi vào lệnh nhỏ 🎯”
-- Nếu 🛡️ Safe + Δ% > 0 ⇒ “Ưu tiên quan sát, chờ xác nhận thêm 👀”
-- Nếu 🧊 Lạnh ⇒ “Không khuyến nghị vào, volume yếu 💤”
-- Nếu SHORT chiếm đa số ⇒ “Ưu tiên lệnh short, thị trường yếu ⬇️”
-- Nếu LONG chiếm đa số ⇒ “Ưu tiên lệnh long, momentum đang tốt ⬆️”
+**Tín hiệu (10–20 chữ)**  
+- 🔥 ≥4.5 → “Canh vào sớm theo dòng tiền lớn 🚀”  
+- ⚠️ + Δ%<0 → “Chờ hồi rồi vào lệnh nhỏ 🎯”  
+- 🛡️ + Δ%>0 → “Quan sát, chờ xác nhận thêm 👀”  
+- 🧊 → “Không khuyến nghị, volume yếu 💤”  
+- SHORT nhiều → “Ưu tiên short, thị trường yếu ⬇️”  
+- LONG nhiều → “Ưu tiên long, momentum tốt ⬆️”  
 
 ---
 
-### 🎨 **Yêu cầu trình bày**
-- Dùng **Markdown**, giữ nguyên emoji: 🔥💰⚖️📈⏱️👥🔢✅🛡️⚠️💎↗️↘️💣💥🚀🎯👀⬆️⬇️💤  
-- Không thêm bảng hoặc phần giải thích.  
-- Luôn có đúng 5 Symbol, sắp xếp theo độ nóng giảm dần.  
-- Ngôn ngữ: **tiếng Việt tự nhiên, chuyên nghiệp, tinh gọn.**
+### 🧩 Format Output (bắt buộc, không thay đổi)
 
+━━━━━━━━━━━━━━━━━━━  
+🔥 <SYMBOL> — <XU HƯỚNG CHÍNH: LONG/SHORT>  
+🕒 Thống kê lúc: <THỜI_GIAN_THỐNG_KÊ>  
+⏱️ Trong <KHOẢNG THỜI GIAN>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở  
+(🟩 <X> LONG · 🟥 <Y> SHORT)  
+💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ so với giá mở  
+👥 Traders: <TÊN TRADER> (#<UID>) …  
+🔢 ID lệnh: <DANH SÁCH ID> …  
+✅ Lý do: <GIẢI THÍCH NGẮN, ĐÚNG NGỮ CẢNH>  
+🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive  
+💡 Tín hiệu: <CÂU GỢI Ý HÀNH ĐỘNG>  
+━━━━━━━━━━━━━━━━━━━  
 
-Dữ liệu đầu vào:
+---
+
+### 🖌️ Quy tắc trình bày
+- Giữ nguyên emoji: 🔥💰⚖️📈⏱️👥🔢✅🛡️⚠️💎↗️↘️💣💥🚀🎯👀⬆️⬇️💤  
+- Mỗi Symbol chỉ thống kê đúng dữ liệu của nó, **không gộp toàn bảng.**  
+- Luôn có **5 Symbol**, sắp xếp theo **Độ nóng giảm dần**.  
+- Ngôn ngữ: **Tiếng Việt tự nhiên, ngắn gọn, chuyên nghiệp.**
+
+---
+
+**Dữ liệu đầu vào:**  
+
 ${csv || "<NO_CSV_PROVIDED>"}
 `.trim();
 
