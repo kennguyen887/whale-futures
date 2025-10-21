@@ -40,45 +40,83 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Phân tích file CSV gồm các lệnh copy trade (trường như: Trader, Symbol, Lev, Margin Mode, PNL, ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID).
+Bạn là chuyên gia phân tích dữ liệu copy trade từ file CSV.  
+File CSV có các cột:  
+Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID, ID…
 
-Mục tiêu: Tạo report “Top kèo nóng (tinh gọn, có icon & lý do)” theo đúng format sau:
-
-Top 5 kèo nóng (tinh gọn, có icon & lý do):
-
-SOLUSDT — LONG — 🔥 35 lệnh/10m(32 long, 3 short) · 💰 ~8,322.3k notional · ⚖️ 92x TB · ↔️ -0.22% · ⏱️ từ 5 giây đến 4 tiếng 30 phút trước 
-👥 Traders: Masters at Coin (#61698494), Mexctrader-9NLMP3 (#30339263), 27*****2 (#27337672)… 
-↗️ ID lệnh: 18313020, 67429135, 82874560… 
-✅ Lý do: gợi ý dùng lev ~20x, dòng tiền đổ vào rất mạnh (pile-in), notional lớn, đòn bẩy cao ⇒ kèo “nóng tay”.
-
-BTCUSDT - SHORT — 🔥 12 lệnh/10m(0 long, 12 short) · 💰 ~2,486.5k notional · ⚖️ 61x TB · ↔️ +0.13% · ⏱️ từ 2phút đến 3 tiếng 30 phút trước 
-👥 Traders: 82*****0 (#82874560), Mexctrader-LeA89w (#18313020), WAVE SURFER (#67429135)…  
-↗️ ID lệnh: 18313020, 67429135, 82874560… 
-✅ Lý do: gợi ý dùng lev ~10x, nhiều lệnh đồng thời + notional cao ⇒ độ tin cậy tốt để copy theo dòng.
-
-...
+🎯 **Mục tiêu:**  
+Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)” — chuyên nghiệp, ngắn gọn, đúng format cố định.
 
 ---
 
-**Yêu cầu cụ thể:**
-- Chỉ tính lệnh mở trong **10 phút gần nhất** (theo “Open At (VNT)”).
-- Gom nhóm theo **Symbol**.
-- Tính:
-  - 🔥 số lượng lệnh (entries)
-  - 💰 tổng notional (Σ Notional)
-  - ⚖️ trung bình leverage (Avg Lev)
-  - ↔️ trung bình Δ % vs Open
-  - ⏱️ thời gian lệnh mới nhất
-  - Có nhiều VIP trader(followers > 1000 và name có icon ⭐) đang vào coin này.
-- Ghi rõ **Top traders** (3–5 người đầu, có UID).
-- Thêm **Lý do ngắn gọn, tự động** dựa trên dữ liệu:
-  - Nếu entries > 5 ⇒ “dòng tiền đổ vào mạnh”
-  - Nếu leverage > 80 ⇒ “đòn bẩy cao, rủi ro ↗️”
-  - Nếu Δ % < 0 ⇒ “đang điều chỉnh nhẹ”
-  - Nếu Δ % > 0 ⇒ “đang bật trend dương”
-  - Nếu notional > trung bình toàn bảng ⇒ “volume lớn, đáng chú ý”
-- Giữ format Markdown, có emoji và icon rõ ràng.
-- Sắp xếp theo độ nóng giảm dần (entries và notional).
+### 🔍 **Quy trình phân tích**
+1️⃣ Gom nhóm theo **Symbol**.  
+2️⃣ Tự động xác định **khoảng thời gian gần nhất** (linh động 5–60 phút) dựa vào cột “Open At (VNT)”.  
+3️⃣ Với mỗi Symbol, thống kê:
+   - 🔥 **Tổng số lệnh** (Entries)
+   - 🟩 **Số Long** / 🟥 **Số Short**
+   - 💰 **Tổng Notional (USDT)**
+   - ⚖️ **Leverage trung bình**
+   - 📈 **Δ % vs Open trung bình**
+   - ⏱️ **Khoảng thời gian mở (từ … đến … trước)**
+   - 👥 **Danh sách Trader tiêu biểu**
+   - 🔢 **Danh sách ID lệnh**
+   - Xác định xu hướng chính: **LONG** hoặc **SHORT** (dựa theo tỷ lệ lệnh)
+4️⃣ Xếp hạng **Top 5 Symbol nóng nhất** theo tổng notional & entries.
+5️⃣ Xuất kết quả theo đúng format dưới đây, tuyệt đối không thay đổi bố cục:
+
+---
+
+### 🔥 **Top 5 kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)**
+
+<SYMBOL> — <LONG/SHORT> — 🔥 <SỐ LỆNH>/<KHOẢNG THỜI GIAN> (<🟩 X long, 🟥 Y short>) · 💰 ~<NOTIONAL>k notional · ⚖️ <LEV>x TB · 📈 <DELTA>% · ⏱️ từ <THỜI GIAN> đến <THỜI GIAN> trước  
+👥 **Traders:** <TÊN TRADER> (#<UID>), …  
+🔢 **ID lệnh:** <DANH SÁCH ID>…  
+✅ **Lý do:** <SINH NGẮN GỌN THEO QUY TẮC DƯỚI ĐÂY>  
+🔥 **Độ nóng:** <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive  
+💡 **Tín hiệu:** <GỢI Ý HÀNH ĐỘNG NGẮN GỌN>  
+
+---
+
+### 🧠 **Quy tắc sinh “Lý do” (✅):**
+- Nếu 🔥 entries > 10 ⇒ “dòng tiền đổ vào mạnh, notional lớn, đòn bẩy cao ⇒ kèo 🔥 nóng tay”
+- Nếu ⚖️ leverage > 80 ⇒ thêm “rủi ro cao ⚠️”
+- Nếu 📈 Δ% < 0 ⇒ thêm “đang điều chỉnh nhẹ ↘️”
+- Nếu 📈 Δ% > 0 ⇒ thêm “đang bật trend dương ↗️”
+- Nếu 👥 chỉ 1–3 trader ⇒ thêm “ít người nhưng đòn bẩy cao 💣”
+- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”
+- Nếu 💰 notional vượt trung bình toàn bảng ⇒ thêm “volume lớn, hút tiền 💥”
+
+---
+
+### 🔥 **Công thức chấm điểm “Độ nóng /5”:**
+Độ_nóng = (Entries_norm × 0.4) + (Notional_norm × 0.3) + (Leverage_norm × 0.2) + (Trend_boost × 0.1)
+
+Phân loại:
+- **1.0–2.0:** 🧊 Lạnh  
+- **2.1–3.4:** 🛡️ Safe  
+- **3.5–4.4:** ⚠️ Risk  
+- **4.5–5.0:** 🔥 Aggressive  
+
+---
+
+### 💡 **Quy tắc sinh “Tín hiệu gợi ý hành động”**
+Tự sinh 1 câu ngắn gọn, súc tích (10–20 chữ) dựa trên trạng thái dữ liệu:
+- Nếu 🔥 ≥ 4.5 ⇒ “Nên canh vào sớm theo dòng tiền lớn 🚀”
+- Nếu ⚠️ Risk + Δ% < 0 ⇒ “Chờ hồi nhẹ rồi vào lệnh nhỏ 🎯”
+- Nếu 🛡️ Safe + Δ% > 0 ⇒ “Ưu tiên quan sát, chờ xác nhận thêm 👀”
+- Nếu 🧊 Lạnh ⇒ “Không khuyến nghị vào, volume yếu 💤”
+- Nếu SHORT chiếm đa số ⇒ “Ưu tiên lệnh short, thị trường yếu ⬇️”
+- Nếu LONG chiếm đa số ⇒ “Ưu tiên lệnh long, momentum đang tốt ⬆️”
+
+---
+
+### 🎨 **Yêu cầu trình bày**
+- Dùng **Markdown**, giữ nguyên emoji: 🔥💰⚖️📈⏱️👥🔢✅🛡️⚠️💎↗️↘️💣💥🚀🎯👀⬆️⬇️💤  
+- Không thêm bảng hoặc phần giải thích.  
+- Luôn có đúng 5 Symbol, sắp xếp theo độ nóng giảm dần.  
+- Ngôn ngữ: **tiếng Việt tự nhiên, chuyên nghiệp, tinh gọn.**
+
 
 Dữ liệu đầu vào:
 ${csv || "<NO_CSV_PROVIDED>"}
