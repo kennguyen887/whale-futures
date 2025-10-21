@@ -49,67 +49,64 @@ Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, đúng format
 🧭 Chuẩn hoá & Ràng buộc
 - Timezone: Asia/Ho_Chi_Minh. Parse “Open At (VNT)” chuẩn ISO.
 - Cửa sổ: nếu user chỉ định thì dùng chính xác; nếu không ⇒ NOW-3h..NOW.
-- Mapping bắt buộc (KHÔNG nhầm lẫn):
-  • Tên trader = cột Trader
+- Mapping bắt buộc:
+  • Trader = cột Trader
   • Trader ID (UID) = cột UID
   • Order ID = cột ID
-- Mọi số liệu của 1 Symbol chỉ lấy từ đúng Symbol đó trong cửa sổ.
+- Mọi dữ liệu Symbol chỉ lấy đúng Symbol đó trong cửa sổ.
 
-🗂 Lọc theo từng Symbol S
+🗂 Lọc theo Symbol S
 - Rows(S) = dòng có Symbol==S & Open At ∈ cửa sổ.
 - Nếu Rows(S) < 3 ⇒ BỎ (tránh coin “1–2 lệnh”).
-- ID_set(S) = tập Order ID duy nhất trong Rows(S). Chỉ dùng các dòng có ID ∈ ID_set(S).
+- ID_set(S) = tập Order ID duy nhất trong Rows(S).
 
-📐 Tính toán (chỉ từ ID_set(S))
+📐 Tính toán
 - SỐ_LỆNH = |ID_set(S)|
-- X = số ID Mode==LONG; Y = số ID Mode==SHORT; yêu cầu X+Y==SỐ_LỆNH.
-- 💰 MARGIN_TỔNG = Σ “Margin (USDT)” (theo ID); hiển thị ~{k} (1 số thập phân).
-- ⚖️ LEV_TB = avg(Lev) (làm tròn 0).
-- 📈 DELTA_TB = avg(Δ % vs Open) (2 số).
-- 👥 Traders = danh sách duy nhất “Tên (#UID)”, sort theo tổng Margin giảm dần, tối đa 5.
-  • Gắn ⭐ ngay SAU tên trader nếu VIP (xem dưới).
-- 🔢 ID lệnh = DANH SÁCH Order ID thực tế (max 30; dư ⇒ “…").
-- Xu hướng chính: LONG nếu X>Y; SHORT nếu Y>X; hoà ⇒ phe có tổng Margin lớn hơn; vẫn hoà ⇒ NEUTRAL.
+- X = Mode==LONG; Y = Mode==SHORT; yêu cầu X+Y==SỐ_LỆNH.
+- 💰 MARGIN_TỔNG = Σ Margin (USDT) (theo ID); hiển thị ~{k}.
+- 💵 PNL_TỔNG = Σ PNL (USDT) (theo ID); hiển thị ~{k}.
+- ⚖️ LEV_TB = avg(Lev); 📈 DELTA_TB = avg(Δ % vs Open) (2 số).
+- 👥 Traders = “Tên (#UID)” sắp theo tổng Margin giảm dần, max 5.
+  • Gắn ⭐ sau tên trader nếu VIP.
+- 🔢 ID = danh sách Order ID thật (max 30; dư ⇒ “…").
+- Xu hướng: LONG nếu X>Y; SHORT nếu Y>X; hoà ⇒ phe có Margin cao hơn.
 
-⭐ Xác định Trader VIP
-- VIP nếu (UID ∈ VIP_UIDS do user truyền) HOẶC Followers thuộc top 10% trong Rows(S) của chính Symbol đó.
-- Ký hiệu: “TênTrader⭐ (#UID)”.
+⭐ Trader VIP
+- VIP nếu UID nằm trong VIP_UIDS hoặc Followers thuộc top 10% trong Symbol.
+- Gắn ký hiệu ⭐ ngay sau tên.
 
-📊 Độ nóng /5 (ưu tiên coin thực sự sôi động)
-- Chuẩn hoá trên các Symbol còn lại trong cửa sổ:
-  entries_norm, margin_norm, lev_norm, pnl_stability_norm (0..1), trend_boost∈{0,1}.
-- PNL Stability (3h): dùng độ lệch chuẩn ROI % hoặc PNL (nhóm theo ID). std thấp ⇒ ổn (điểm cao).
-- trend_boost=1 nếu (xu hướng LONG & DELTA_TB>0) hoặc (SHORT & DELTA_TB<0), ngược lại 0.
-- hot = 0.35*entries_norm + 0.30*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.05*trend_boost
-- Chọn top 5 theo hot giảm dần; bỏ Symbol có dữ liệu quá ít/không đạt.
+📊 Độ nóng /5
+hot = 0.35*entries_norm + 0.30*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.05*trend_boost  
+trend_boost=1 nếu (LONG & Δ>0) hoặc (SHORT & Δ<0).  
+PNL Stability = độ lệch chuẩn ROI% hoặc PNL (nhóm theo ID), std thấp ⇒ điểm cao.  
+Chọn top 5 Symbol có hot cao nhất và Rows(S) hợp lệ.
 
 🧠 Lý do & Tín hiệu
-- Ưu tiên nhiều lệnh cùng hướng, gần hiện tại (≤1h).
-- Lev>80 ⇒ ⚠️ rủi ro cao; Δ>0 ⇒ trend ↗️; Δ<0 ⇒ ↘️.
-- ≤3 trader nhưng Margin lớn ⇒ 💣; nhiều trader + Margin lớn ⇒ 💎.
-- PNL ổn trong 3h (std thấp) ⇒ “ổn định”; std cao ⇒ “biến động”.
-- “Tín hiệu” 10–20 chữ, rõ ràng theo xu hướng & hot.
+- Ưu tiên nhiều lệnh cùng hướng, gần hiện tại (≤1h).  
+- Lev>80 ⇒ ⚠️ rủi ro cao; Δ>0 ⇒ trend ↗️; Δ<0 ⇒ ↘️.  
+- ≤3 trader nhưng Margin lớn ⇒ 💣; nhiều trader + Margin lớn ⇒ 💎.  
+- PNL ổn 3h qua ⇒ “ổn định”, biến động mạnh ⇒ “dao động”.  
+- Viết lý do chi tiết hơn, giải thích yếu tố VIP⭐, Margin, PNL, xu hướng.  
+- “Tín hiệu” 10–20 chữ, ngắn, dễ hiểu.
 
-🧾 FORMAT OUTPUT (giữ nguyên cấu trúc, cập nhật dùng MARGIN_TỔNG)
+🧾 FORMAT OUTPUT
 ━━━━━━━━━━━━━━━━━━━
 🔥 <SYMBOL> — <LONG/SHORT>
 🕒 Thống kê: <THỜI_GIAN_THỐNG_KÊ>
 ⏱️ Trong <KHOẢNG>, có <SỐ_LỆNH> lệnh (🟩 <X> LONG · 🟥 <Y> SHORT)
-💰 ~<MARGIN_TỔNG>k USDT · ⚖️ <LEV_TB>x TB · 📈 <DELTA_TB>% Δ
+💰 ~<MARGIN_TỔNG>k USDT · 💵 ~<PNL_TỔNG>k PNL · ⚖️ <LEV_TB>x TB · 📈 <DELTA_TB>% Δ
 👥 Traders: <TênTrader[⭐] (#UID)>, …
 🔢 ID: <DANH_SÁCH_ORDER_ID> …
-✅ Lý do: <diễn giải ngắn nhưng CỤ THỂ, nhắc VIP⭐/PNL ổn/biến động, lượng trader, margin, thời tính>
+✅ Lý do: <CỤ THỂ, nêu VIP⭐, PNL ổn định, Margin cao, xu hướng, số trader>
 🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
 💡 Tín hiệu: <Gợi ý hành động 10–20 chữ>
 ━━━━━━━━━━━━━━━━━━━
 
-🔒 Kiểm lỗi trước khi in
-- SỐ_LỆNH == số phần tử thực trong “ID”.
-- X+Y==SỐ_LỆNH.
-- Mọi Trader/UID/Order ID đều thuộc đúng Symbol và đúng cửa sổ.
-- Không gán nhầm Trader ID (UID) vào danh sách Order ID.
-- Không bịa số; nếu thiếu dữ liệu ⇒ bỏ qua Symbol.
-
+🔒 Kiểm lỗi
+- SỐ_LỆNH == số ID; X+Y==SỐ_LỆNH.
+- Trader/UID/Order ID đúng Symbol & cửa sổ.
+- Không nhầm UID ↔ ID.
+- Không bịa số; thiếu dữ liệu ⇒ bỏ Symbol.
 
 Dữ liệu đầu vào: (CSV/bảng copy-trade)
 
