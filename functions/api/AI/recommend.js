@@ -71,11 +71,11 @@ Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu h�
 
 ━━━━━━━━━━━━━━━━━━━
 🔥 *<SYMBOL>* — <LONG/SHORT>  
-⏱️ Trong khoảng <KHOẢNG THỜI GIAN> có tổng <SỐ LỆNH> lệnh entry được mở  
-(🟩 <X> lệnh LONG, 🟥 <Y> lệnh SHORT)  
+⏱️ Trong <KHOẢNG THỜI GIAN>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
+(🟩 <X> LONG, 🟥 <Y> SHORT)s
 💰 ~<NOTIONAL>k · ⚖️ <LEV>x TB · 📈 <DELTA>% 
-👥 *Traders:* <TÊN TRADER> (#<UID>), …  
-🔢 *ID lệnh:* <DANH SÁCH ID>…  
+👥 *Traders:* <TẤT CẢ TÊN TRADER> (#<UID>), …  
+🔢 *ID lệnh:* <TẤT CẢ DANH SÁCH ID>…  
 ✅ *Lý do:* <MÔ TẢ CHI TIẾT VÌ SAO KÈO NÓNG>  
 🔥 *Độ nóng:* <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive  
 💡 *Tín hiệu:* <GỢI Ý HÀNH ĐỘNG>  
@@ -89,7 +89,7 @@ Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu h�
 - Nếu 📈 Δ% < 0 ⇒ thêm “đang điều chỉnh nhẹ ↘️”
 - Nếu 📈 Δ% > 0 ⇒ thêm “đang bật trend dương ↗️”
 - Nếu 👥 chỉ 1–3 trader ⇒ thêm “ít người nhưng đòn bẩy cao 💣”
-- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”
+- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”, và có trader ⭐ cũng vào entry.
 - Nếu 💰 notional vượt trung bình toàn bảng ⇒ thêm “volume lớn, hút tiền 💥”
 
 ---
