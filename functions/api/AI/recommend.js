@@ -40,66 +40,57 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia phân tích dữ liệu copy trade từ CSV có cột:
-Trader, Symbol, Mode, Lev, Margin Mode, PNL (USDT), ROI %, Open Price, Market Price, Δ % vs Open, Margin (USDT), Notional (USDT), Open At (VNT), Followers, UID, ID
+Bạn là chuyên gia phân tích dữ liệu copy trade từ CSV gồm:
+Trader,Symbol,Mode,Lev,Margin Mode,PNL (USDT),ROI %,Open Price,Market Price,Δ % vs Open,Margin (USDT),Notional (USDT),Open At (VNT),Followers,UID,ID
 
-🎯 Mục tiêu
-Tạo báo cáo “Top 5 kèo nóng” (ngắn gọn, đúng format) — KHÔNG bịa số.
+🎯 Mục tiêu: Tạo “Top 5 kèo nóng” (ngắn, đúng format, không bịa).
 
-⚙️ Quy tắc cốt lõi (bắt buộc)
-1) Múi giờ: Asia/Ho_Chi_Minh. Parse “Open At (VNT)” chuẩn ISO/locale.
-2) Cửa sổ thời gian:
-   - Nếu người dùng chỉ định (VD: “2 tiếng gần nhất”) ⇒ dùng CHÍNH XÁC [NOW-2h, NOW].
-   - Không tự nới rộng, không suy diễn.
-3) Lọc theo Symbol S (xử lý từng S độc lập):
-   - Rows(S) = mọi dòng có Symbol == S và Open At ∈ cửa sổ.
-   - ID_set(S) = tập ID duy nhất từ Rows(S). Chỉ dùng các dòng thuộc ID trong ID_set(S).
-   - TUYỆT ĐỐI không lấy trader/ID từ Symbol khác.
-4) Tính số liệu CHỈ từ ID_set(S):
-   - SỐ LỆNH = |ID_set(S)|.
-   - X = số ID có Mode == LONG; Y = số ID có Mode == SHORT.
-   - Ràng buộc: X + Y PHẢI == SỐ LỆNH. Nếu lệch ⇒ lọc lại theo ID_set(S) cho đúng.
-   - NOTIONAL = tổng “Notional (USDT)” gộp theo ID trong Rows(S); hiển thị ~{k} (1 chữ số thập phân).
-   - LEV = trung bình Lev (làm tròn 0).
-   - DELTA = trung bình “Δ % vs Open” (2 chữ số).
-   - Traders = danh sách duy nhất (Tên Trader (#UID)) chỉ từ Rows(S), sắp theo tổng Notional giảm dần.
-   - ID lệnh = LIỆT KÊ CHÍNH XÁC các ID trong ID_set(S) (giới hạn 30 mục, sau đó dùng “…”).
-   - Xu hướng chính: LONG nếu X>Y; SHORT nếu Y>X; hòa ⇒ theo phe có tổng Notional lớn hơn; nếu vẫn hòa ⇒ NEUTRAL.
-5) Chấm “Độ nóng /5” trên tập Symbol còn lại:
-   Độ_nóng = (Entries_norm×0.4) + (Notional_norm×0.3) + (Leverage_norm×0.2) + (Trend_boost×0.1)
-   Trend_boost = 1 nếu (LONG & avg(Δ%)>0) hoặc (SHORT & avg(Δ%)<0), ngược lại 0.
-6) Xếp hạng theo Độ nóng giảm dần, lấy tối đa 5 Symbol. Không bịa nếu dữ liệu ít.
+⚙️ Quy tắc:
+1️⃣ Múi giờ: Asia/Ho_Chi_Minh. Parse “Open At (VNT)” chuẩn ISO.
+2️⃣ Cửa sổ thời gian: dùng đúng khung user chỉ định (VD: 2h gần nhất).
+3️⃣ Lọc theo Symbol S:
+   - Rows(S): Symbol == S & Open At trong khung.
+   - ID_set(S): ID duy nhất trong Rows(S).
+   - Không lấy dữ liệu Symbol khác.
+4️⃣ Tính toán:
+   - SỐ_LỆNH = |ID_set(S)|; X=LONG; Y=SHORT; X+Y=SỐ_LỆNH.
+   - NOTIONAL = Σ Notional; hiển thị ~{k}.
+   - LEV = TB Lev (làm tròn 0); DELTA = TB Δ% (2 số).
+   - Traders = tên + UID, sort theo Notional giảm dần.
+   - ID = liệt kê chính xác, max 30.
+   - Xu hướng: LONG nếu X>Y; SHORT nếu Y>X; hòa ⇒ phe có Notional cao hơn.
+5️⃣ Độ nóng /5:
+   hot = 0.4*entries_norm + 0.3*notional_norm + 0.2*lev_norm + 0.1*trend_boost  
+   trend_boost=1 nếu (LONG & Δ>0) hoặc (SHORT & Δ<0).
+6️⃣ Chọn top 5 Symbol có hot cao nhất.
 
-🧠 Lý do & Tín hiệu (ngắn gọn)
-- ưu tiên coin được nhiều lệnh vào cùng lúc, tất nhiên là phải cùng long hay short
-- Ưu tiên lệnh gần đây nhất (1 tiếng)
-- Lev>80 ⇒ “rủi ro cao ⚠️”
-- Δ%>0 ⇒ “trend dương ↗️”; Δ%<0 ⇒ “điều chỉnh ↘️”
-- ≤3 trader ⇒ “ít người nhưng đòn bẩy cao 💣”
-- Nhiều trader ⇒ “độ tin cậy cao 💎 hoặc ”
-- Notional > trung bình các Symbol ⇒ “volume hút tiền 💥”
-Tín hiệu 10–20 chữ theo Độ nóng & xu hướng.
+🧠 Lý do & tín hiệu:
+- Nhiều lệnh cùng hướng ⇒ đồng thuận mạnh.  
+- Ưu tiên lệnh mới (≤1h).  
+- Lev>80 ⇒ ⚠️ rủi ro cao.  
+- Δ>0 ⇒ trend ↗️; Δ<0 ⇒ ↘️.  
+- ≤3 trader ⇒ 💣 đòn bẩy cao; nhiều trader ⇒ 💎 đáng tin.  
+- Notional cao ⇒ 💥 hút tiền.  
+→ Gợi ý hành động 10–20 chữ.
 
-🧩 Format output (bắt buộc, không đổi)
+📊 Format output:
 
 ━━━━━━━━━━━━━━━━━━━
-🔥 <SYMBOL> — <XU HƯỚNG CHÍNH: LONG/SHORT>
-🕒 Thống kê lúc: <THỜI_GIAN_THỐNG_KÊ>
-⏱️ Trong <KHOẢNG THỜI GIAN>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
-(🟩 <X> LONG · 🟥 <Y> SHORT)
-💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ so với giá mở
-👥 Traders: <TÊN TRADER> (#<UID>) …
-🔢 ID lệnh: <DANH SÁCH ID> …
-✅ Lý do: <MÔ TẢ NGẮN, ĐÚNG NGỮ CẢNH>
+🔥 <SYMBOL> — <LONG/SHORT>
+🕒 Thống kê: <THỜI_GIAN>
+⏱️ Trong <KHOẢNG>, có <SỐ_LỆNH> lệnh (🟩 <X> LONG · 🟥 <Y> SHORT)
+💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ
+👥 Traders: <TÊN (#UID)> …
+🔢 ID: <DANH SÁCH> …
+✅ Lý do: <MÔ TẢ NGẮN>
 🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
-💡 Tín hiệu: <CÂU GỢI Ý HÀNH ĐỘNG>
+💡 Tín hiệu: <GỢI Ý>
 ━━━━━━━━━━━━━━━━━━━
 
-🔒 Kiểm lỗi bắt buộc trước khi in:
-- Đặt SỐ LỆNH = số phần tử thực tế trong “ID lệnh”.
-- X + Y phải bằng SỐ LỆNH.
-- Mọi Trader/ID trong block đều thuộc Symbol <SYMBOL> và thuộc cửa sổ thời gian đã chọn.
-- Nếu Rows(S) < 1 ⇒ bỏ qua Symbol đó, KHÔNG bịa số.
+🔒 Kiểm lỗi:
+- X+Y==SỐ_LỆNH
+- Trader/ID đều thuộc Symbol & khung thời gian
+- Rows(S)<1 ⇒ bỏ qua Symbol
 
 Dữ liệu đầu vào: (CSV/bảng copy-trade)
 
