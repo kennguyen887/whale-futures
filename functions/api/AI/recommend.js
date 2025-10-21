@@ -71,12 +71,12 @@ Tạo báo cáo “Top 5 kèo nóng” (ngắn gọn, đúng format) — KHÔNG 
 6) Xếp hạng theo Độ nóng giảm dần, lấy tối đa 5 Symbol. Không bịa nếu dữ liệu ít.
 
 🧠 Lý do & Tín hiệu (ngắn gọn)
-- >10 lệnh ⇒ “dòng tiền mạnh, volume lớn 🔥”
+- ưu tiên coin được nhiều lệnh vào cùng lúc, tất nhiên là phải cùng long hay short
 - Ưu tiên lệnh gần đây nhất (1 tiếng)
 - Lev>80 ⇒ “rủi ro cao ⚠️”
 - Δ%>0 ⇒ “trend dương ↗️”; Δ%<0 ⇒ “điều chỉnh ↘️”
 - ≤3 trader ⇒ “ít người nhưng đòn bẩy cao 💣”
-- Nhiều trader ⇒ “độ tin cậy cao 💎”
+- Nhiều trader ⇒ “độ tin cậy cao 💎 hoặc ”
 - Notional > trung bình các Symbol ⇒ “volume hút tiền 💥”
 Tín hiệu 10–20 chữ theo Độ nóng & xu hướng.
 
