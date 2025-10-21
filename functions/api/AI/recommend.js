@@ -69,14 +69,13 @@ Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu h�
 
 ### 🔥 **Top 5 kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)**
 
-━━━━━━━━━━━━━━━━━━━
 🔥 <SYMBOL> — <XU HƯỚNG CHÍNH: LONG/SHORT>
 🕒 Thống kê lúc: <THỜI_GIAN_THỐNG_KÊ>
-⏱️ Trong <KHOẢNG THỜI GIAN>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
+⏱️ Trong <KHOẢNG THỜI GIAN TẦM>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
 (🟩 <X> LONG · 🟥 <Y> SHORT)
 💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ so với giá mở
 👥 Traders: <LIỆT KÊ TÊN TRADER> (#<UID>) …
-🔢 ID lệnh: <LIỆT KÊ DANH SÁCH ID> …
+🔢 ID lệnh: <LIỆT KÊ ĐẦY ĐỦ DANH SÁCH ID> …
 ✅ Lý do: <MÔ TẢ NGẮN GỌN, TRÚNG Ý, NÊU RÕ YẾU TỐ HOT>
 🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
 💡 Tín hiệu: <CÂU GỢI Ý HÀNH ĐỘNG 10–20 CHỮ>
@@ -85,12 +84,13 @@ Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu h�
 ---
 
 ### 🧠 **Quy tắc sinh “Lý do” (✅):**
+- Ưu tiên những lệnh trong vòng 2 giờ gần nhất.
 - Nếu 🔥 entries > 10 ⇒ “dòng tiền đổ vào mạnh, notional lớn, đòn bẩy cao ⇒ kèo 🔥 nóng tay”
 - Nếu ⚖️ leverage > 80 ⇒ thêm “rủi ro cao ⚠️”
 - Nếu 📈 Δ% < 0 ⇒ thêm “đang điều chỉnh nhẹ ↘️”
 - Nếu 📈 Δ% > 0 ⇒ thêm “đang bật trend dương ↗️”
 - Nếu 👥 chỉ 1–3 trader ⇒ thêm “ít người nhưng đòn bẩy cao 💣”
-- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”, và có trader ⭐ cũng vào entry.
+- Nếu 👥 nhiều trader cùng Symbol ⇒ thêm “độ tin cậy tốt để copy theo dòng 💎”, và NẾU trader VIP(name có icon ⭐) cũng là 1 điểm cộng để thêm vào lý do.
 - Nếu 💰 notional vượt trung bình toàn bảng ⇒ thêm “volume lớn, hút tiền 💥”
 
 ---
