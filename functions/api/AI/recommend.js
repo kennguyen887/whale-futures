@@ -70,15 +70,16 @@ Tạo báo cáo “Top kèo nóng (tinh gọn, có icon, lý do & tín hiệu h�
 ### 🔥 **Top 5 kèo nóng (tinh gọn, có icon, lý do & tín hiệu hành động)**
 
 ━━━━━━━━━━━━━━━━━━━
-🔥 *<SYMBOL>* — <LONG/SHORT>  
+🔥 <SYMBOL> — <XU HƯỚNG CHÍNH: LONG/SHORT>
+🕒 Thống kê lúc: <THỜI_GIAN_THỐNG_KÊ>
 ⏱️ Trong <KHOẢNG THỜI GIAN>, riêng <SYMBOL> có <SỐ LỆNH> lệnh mới mở
-(🟩 <X> LONG, 🟥 <Y> SHORT)s
-💰 ~<NOTIONAL>k · ⚖️ <LEV>x TB · 📈 <DELTA>% 
-👥 *Traders:* <TẤT CẢ TÊN TRADER> (#<UID>), …  
-🔢 *ID lệnh:* <TẤT CẢ DANH SÁCH ID>…  
-✅ *Lý do:* <MÔ TẢ CHI TIẾT VÌ SAO KÈO NÓNG>  
-🔥 *Độ nóng:* <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive  
-💡 *Tín hiệu:* <GỢI Ý HÀNH ĐỘNG>  
+(🟩 <X> LONG · 🟥 <Y> SHORT)
+💰 ~<NOTIONAL>k USDT · ⚖️ <LEV>x TB · 📈 <DELTA>% Δ so với giá mở
+👥 Traders: <LIỆT KÊ TÊN TRADER> (#<UID>) …
+🔢 ID lệnh: <LIỆT KÊ DANH SÁCH ID> …
+✅ Lý do: <MÔ TẢ NGẮN GỌN, TRÚNG Ý, NÊU RÕ YẾU TỐ HOT>
+🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
+💡 Tín hiệu: <CÂU GỢI Ý HÀNH ĐỘNG 10–20 CHỮ>
 ━━━━━━━━━━━━━━━━━━━
 
 ---
