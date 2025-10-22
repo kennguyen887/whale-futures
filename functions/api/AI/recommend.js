@@ -111,7 +111,7 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 🔥 <SYMBOL> — <LONG/SHORT>
 🕒 Thống kê: <THỜI_GIAN_THỐNG_KÊ>
 ⏱️ Trong <KHOẢNG>, có <SỐ_LỆNH> lệnh (🟩 <X> LONG · 🟥 <Y> SHORT)
-💰 ~<MARGIN_TỔNG>k USDT · 💵 ~<PNL_TỔNG>k PNL · ⚖️ <LEV_TB>x TB · 📈 <ΔTB>% Δ
+💰 <MARGIN_TỔNG>k USDT · 💵 <PNL_TỔNG>k PNL · ⚖️ TB: <LEV_TB>x  · 📈 <ΔTB>% Δ
 👥 Traders: <TênTrader[⭐] (#UID)>, …
 🔢 ID: <DANH_SÁCH_ORDER_ID>
 ✅ Lý do: <Nhiều trader khác nhau cùng vào, VIP⭐, xu hướng, PNL dương, độ ổn định>
@@ -120,9 +120,9 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 ━━━━━━━━━━━━━━━━━━━
 
 📊 Tổng kết cuối cùng:
-📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT> — vì <lý do cụ thể: giá trung bình, PNL dương, trend mạnh, nhiều trader cùng hướng>  
-🤕 Traders vào “hớ”: <Tên (#UID)> — <Symbol> — <LONG/SHORT sai hướng> — vì <vào ngược trend, ΔTB bất lợi hoặc PNL âm>  
-💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> — <PNL cao, đúng hướng, vào sớm> — vì <bắt đúng trend, Margin hợp lý, Lev vừa phải>
+📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT> · 💵 <PNL_TỔNG>k PNL — vì <lý do cụ thể: giá trung bình, PNL dương, trend mạnh, nhiều trader cùng hướng>  
+🤕 Traders vào “hớ”: <Tên (#UID)> — <Symbol> · 💵 <PNL_TỔNG>k PNL — <LONG/SHORT sai hướng> — vì <vào ngược trend, ΔTB bất lợi hoặc PNL âm>  
+💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> · 💵 <PNL_TỔNG>k PNL — <PNL cao, đúng hướng, vào sớm> — vì <bắt đúng trend, Margin hợp lý, Lev vừa phải>
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 Kiểm lỗi
