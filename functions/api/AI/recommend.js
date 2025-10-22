@@ -50,13 +50,13 @@ Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, chính xác, 
 - Timezone: Asia/Ho_Chi_Minh. Parse “Open At (VNT)” chuẩn ISO.
 - Cửa sổ: nếu user chỉ định thì dùng; nếu không ⇒ NOW-3h..NOW.
 - Mapping cố định:
-  • Trader = cột Trader
-  • UID = Trader ID
-  • ID = Order ID (không nhầm UID)
+  • Trader = cột Trader  
+  • UID = Trader ID  
+  • ID = Order ID (không nhầm UID)  
 - Mỗi Symbol tính độc lập trong cửa sổ thời gian.
 
 🧩 Lọc dữ liệu
-- Rows(S) = dòng có Symbol==S & Open At ∈ cửa sổ.
+- Rows(S) = dòng có Symbol==S & Open At ∈ cửa sổ.  
 - Bỏ Symbol nếu:
   • Rows(S) < 3  
   • Chỉ có 1 trader duy nhất (1 UID)  
@@ -67,8 +67,8 @@ Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, chính xác, 
 📊 Tính toán
 - SỐ_LỆNH = |ID_set(S)|
 - X = Mode==LONG; Y = Mode==SHORT; X+Y==SỐ_LỆNH.
-- 💰 MARGIN_TỔNG = Σ Margin (USDT) (theo ID); hiển thị ~{k}.
-- 💵 PNL_TỔNG = Σ PNL (USDT) (theo ID); hiển thị ~{k}.
+- 💰 MARGIN_TỔNG = Σ Margin (USDT); hiển thị ~{k}.
+- 💵 PNL_TỔNG = Σ PNL (USDT); hiển thị ~{k}.
 - ⚖️ LEV_TB = avg(Lev, 0); 📈 ΔTB = avg(Δ % vs Open, 2 số).
 - 👥 Traders = danh sách “Tên (#UID)” theo tổng Margin giảm dần, max 5.
   • Gắn ⭐ sau tên nếu trader VIP.
@@ -80,7 +80,7 @@ Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, chính xác, 
 - Hiển thị: <TênTrader>⭐ (#UID)
 
 🔥 Độ nóng (hot score)
-hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.1*trend_boost
+hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.1*trend_boost  
 - trend_boost = 1 nếu (LONG & ΔTB>0) hoặc (SHORT & ΔTB<0)
 - pnl_stability_norm cao nếu PNL trung bình dương và std(PNL) thấp
 - Nếu chỉ 1 trader ⇒ hot = 0
@@ -96,6 +96,11 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 - Lý do chi tiết: số trader, VIP⭐, PNL, Margin, xu hướng, độ tin cậy.
 - “Tín hiệu” 10–20 chữ, ngắn gọn, hành động rõ ràng.
 
+📈 Phân tích tổng quan (thêm bắt buộc)
+- Tổng kết **phe LONG vs SHORT** xem bên nào đang có lợi nhuận cao hơn trong 3h qua (dựa PNL_TỔNG và ΔTB trung bình).
+- Liệt kê **các trader đang vào “hớ”** (vào sai xu hướng: ví dụ LONG nhưng ΔTB<0, hoặc SHORT nhưng ΔTB>0).
+- Gợi ý **các trader vào “thông minh nhất”** (PNL dương, đúng xu hướng, Margin hợp lý, Lev vừa phải, vào sớm trend).
+
 🧾 FORMAT OUTPUT
 ━━━━━━━━━━━━━━━━━━━
 🔥 <SYMBOL> — <LONG/SHORT>
@@ -107,6 +112,12 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 ✅ Lý do: <Nhiều trader khác nhau cùng vào, VIP⭐, xu hướng, PNL dương, độ ổn định>
 🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
 💡 Tín hiệu: <Gợi ý hành động 10–20 chữ>
+━━━━━━━━━━━━━━━━━━━
+
+📊 Tổng kết cuối cùng:
+📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT>, PNL trung bình ~<X>%
+🤕 Trader vào “hớ”: <Tên (#UID)> — lệnh <Symbol> — <SHORT/LONG sai xu hướng>
+💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> — PNL cao, xu hướng chuẩn
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 Kiểm lỗi
