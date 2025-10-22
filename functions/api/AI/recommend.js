@@ -97,9 +97,14 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 - “Tín hiệu” 10–20 chữ, ngắn gọn, hành động rõ ràng.
 
 📈 Phân tích tổng quan (thêm bắt buộc)
-- Tổng kết **phe LONG vs SHORT** xem bên nào đang có lợi nhuận cao hơn trong 3h qua (dựa PNL_TỔNG và ΔTB trung bình).
-- Liệt kê **các trader đang vào “hớ”** (vào sai xu hướng: ví dụ LONG nhưng ΔTB<0, hoặc SHORT nhưng ΔTB>0).
-- Gợi ý **các trader vào “thông minh nhất”** (PNL dương, đúng xu hướng, Margin hợp lý, Lev vừa phải, vào sớm trend).
+- Tổng kết **phe LONG vs SHORT**: bên nào đang lời nhiều hơn dựa trên PNL_TỔNG, ΔTB trung bình và số lệnh.  
+- Liệt kê **traders đang vào “hớ”**: trader vào sai hướng (LONG khi ΔTB<0 hoặc SHORT khi ΔTB>0).  
+- Liệt kê **traders “thông minh nhất”**: trader có PNL dương, đúng xu hướng, vào sớm trend, Lev hợp lý.  
+- Giải thích **vì sao** từng phe hoặc trader được đánh giá như vậy:  
+  • LONG thắng vì giá trung bình tăng và phần lớn PNL dương.  
+  • SHORT thắng vì giá giảm mạnh, các lệnh short có ΔTB âm nhưng PNL cao.  
+  • Trader “vào hớ” vì vào ngược xu hướng hoặc vào trễ khi trend đã yếu.  
+  • Trader “thông minh nhất” vì bắt đúng điểm đảo chiều, PNL cao, Lev hợp lý, giữ lệnh ổn định.
 
 🧾 FORMAT OUTPUT
 ━━━━━━━━━━━━━━━━━━━
@@ -115,9 +120,9 @@ hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_no
 ━━━━━━━━━━━━━━━━━━━
 
 📊 Tổng kết cuối cùng:
-📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT>, PNL trung bình ~<X>%
-🤕 Trader vào “hớ”: <Tên (#UID)> — lệnh <Symbol> — <SHORT/LONG sai xu hướng>
-💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> — PNL cao, xu hướng chuẩn
+📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT> — vì <lý do cụ thể: giá trung bình, PNL dương, trend mạnh, nhiều trader cùng hướng>  
+🤕 Traders vào “hớ”: <Tên (#UID)> — <Symbol> — <LONG/SHORT sai hướng> — vì <vào ngược trend, ΔTB bất lợi hoặc PNL âm>  
+💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> — <PNL cao, đúng hướng, vào sớm> — vì <bắt đúng trend, Margin hợp lý, Lev vừa phải>
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 Kiểm lỗi
