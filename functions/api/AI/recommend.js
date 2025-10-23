@@ -40,98 +40,83 @@ export const onRequestPost = async (context) => {
 
     // --- prompt ---
     const BASE_PROMPT = `
-Bạn là chuyên gia phân tích dữ liệu Copy Trade Futures từ CSV có cột:
+Bạn là chuyên gia phân tích Copy Trade Futures từ CSV:
 Trader,Symbol,Mode,Lev,Margin Mode,PNL (USDT),ROI %,Open Price,Market Price,Δ % vs Open,Margin (USDT),Notional (USDT),Open At (VNT),Followers,UID,ID
 
 🎯 Mục tiêu
-Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, chính xác, KHÔNG bịa số.
+Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, CHÍNH XÁC, KHÔNG bịa số.
 
-🧭 Quy tắc nền
+🧭 Chuẩn hoá
 - Timezone: Asia/Ho_Chi_Minh. Parse “Open At (VNT)” chuẩn ISO.
-- Cửa sổ: nếu user chỉ định thì dùng; nếu không ⇒ NOW-3h..NOW.
-- Mapping cố định:
-  • Trader = cột Trader  
-  • UID = Trader ID  
-  • ID = Order ID (không nhầm UID)  
-- Mỗi Symbol tính độc lập trong cửa sổ thời gian.
+- Cửa sổ: nếu user chỉ định thì dùng đúng; nếu không ⇒ NOW-3h..NOW.
+- Mapping cứng: Trader = tên; UID = Trader ID; ID = Order ID (không nhầm UID).
 
-🧩 Lọc dữ liệu
-- Rows(S) = dòng có Symbol==S & Open At ∈ cửa sổ.  
-- Bỏ Symbol nếu:
-  • Rows(S) < 3  
-  • Chỉ có 1 trader duy nhất (1 UID)  
-  • Tổng Margin < trung bình chung tất cả Symbol  
-  • 💵 **PNL_TỔNG < 0 ⇒ loại khỏi danh sách “kèo ngon” hoàn toàn**
-- ID_set(S) = tập Order ID duy nhất trong Rows(S) (loại trùng).
+🚫 HARD FILTERS (loại ngay nếu vi phạm)
+- Rows(S) = Symbol==S & Open At ∈ cửa sổ.
+- Dedup theo ID trước khi tính (ID_set(S) = các Order ID duy nhất).
+- SỐ_LỆNH = |ID_set(S)|; yêu cầu SỐ_LỆNH ≥ 3.
+- Distinct trader (distinct UID) ≥ 2.
+- PNL_TỔNG(S) = Σ PNL (USDT) > 0 (không nhận ≤ 0).
+- Không in dấu “~” ở con số. Có thể dùng hậu tố k (12.3k), KHÔNG có dấu ~.
 
-📊 Tính toán
-- SỐ_LỆNH = |ID_set(S)|
-- X = Mode==LONG; Y = Mode==SHORT; X+Y==SỐ_LỆNH.
-- 💰 MARGIN_TỔNG = Σ Margin (USDT); hiển thị ~{k}.
-- 💵 PNL_TỔNG = Σ PNL (USDT); hiển thị ~{k}.
-- ⚖️ LEV_TB = avg(Lev, 0); 📈 ΔTB = avg(Δ % vs Open, 2 số).
-- 👥 Traders = danh sách “Tên (#UID)” theo tổng Margin giảm dần, max 5.
-  • Gắn ⭐ sau tên nếu trader VIP.
-- 🔢 ID lệnh = danh sách Order ID thật (duy nhất, max 30, dư ⇒ “…”).
-- Xu hướng: LONG nếu X>Y; SHORT nếu Y>X; hòa ⇒ phe có tổng Margin lớn hơn.
+📐 TÍNH TOÁN (chỉ với bản ghi có ID ∈ ID_set(S))
+- X = số ID có Mode==LONG; Y = số ID có Mode==SHORT; YÊU CẦU: X+Y == SỐ_LỆNH.
+- MARGIN_TỔNG = Σ Margin (USDT).
+- PNL_TỔNG = Σ PNL (USDT).
+- LEV_TB = avg(Lev) (làm tròn 0); ΔTB = avg(Δ % vs Open, 2 số).
+- Traders = danh sách duy nhất “Tên (#UID)” sort theo ΣMargin ↓ (tối đa 5). Gắn ⭐ nếu VIP (UID ∈ VIP_UIDS hoặc Followers ∈ top 10% của Symbol).
+- ID lệnh = danh sách Order ID **duy nhất**, sắp theo Open At ↓, **ghi kèm hướng**: `ID(MODE)` ví dụ `7361507…(LONG)`. Tối đa 30; dư ⇒ “…”.
+- Nếu cùng một ID có nhiều dòng với Mode khác nhau ⇒ chọn Mode thực tế mới nhất theo Open At; loại dòng còn lại.
+- Xu hướng: LONG nếu X>Y; SHORT nếu Y>X; hoà ⇒ phe có ΣMargin lớn hơn.
 
-⭐ Trader VIP
-- VIP nếu UID thuộc VIP_UIDS hoặc Followers ∈ top 10% trong Symbol.
-- Hiển thị: <TênTrader>⭐ (#UID)
+🔥 HOT SCORE & CHỌN TOP
+- Chuẩn hoá: entries_norm, margin_norm, lev_norm, pnl_stability_norm; trend_boost∈{0,1}.
+- trend_boost = 1 nếu (LONG & ΔTB>0) hoặc (SHORT & ΔTB<0).
+- pnl_stability_norm cao nếu PNL trung bình dương và std(PNL) thấp (gộp theo ID).
+- hot = 0.30*entries_norm + 0.30*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.10*trend_boost.
+- Sắp xếp hot ↓; in tối đa 5 Symbol. Nếu không còn Symbol hợp lệ ⇒ in: “Không có ‘kèo ngon’ trong cửa sổ thời gian.”
 
-🔥 Độ nóng (hot score)
-hot = 0.3*entries_norm + 0.3*margin_norm + 0.15*lev_norm + 0.15*pnl_stability_norm + 0.1*trend_boost  
-- trend_boost = 1 nếu (LONG & ΔTB>0) hoặc (SHORT & ΔTB<0)
-- pnl_stability_norm cao nếu PNL trung bình dương và std(PNL) thấp
-- Nếu chỉ 1 trader ⇒ hot = 0
-- Loại Symbol có hot = 0, Margin thấp, hoặc PNL_TỔNG < 0
-- Cuối cùng: sắp xếp “kèo ngon” theo hot giảm dần, chọn top 5.
+🧠 Diễn giải & Nhãn rủi ro
+- Ưu tiên lệnh mới (≤1h), nhiều trader cùng hướng ⇒ “đồng thuận”.
+- Lev>80 ⇒ ⚠️ Risk; ΔTB>0 ⇒ trend ↗️; ΔTB<0 ⇒ ↘️.
+- Lý do phải CỤ THỂ: số trader, VIP⭐, xu hướng, PNL, Margin, độ ổn định.
+- “Tín hiệu” 10–20 chữ, hành động rõ ràng.
 
-🧠 Diễn giải
-- Chỉ chọn coin có ≥2 trader khác nhau cùng vào trong 3h gần nhất.
-- Ưu tiên lệnh mới (≤1h).
-- Lev>80 ⇒ ⚠️ risk; Δ>0 ⇒ trend ↗️; Δ<0 ⇒ ↘️.
-- Nếu PNL dương và ổn ⇒ mô tả “ổn định, xu hướng rõ”.
-- Nếu ≥3 trader cùng hướng ⇒ “đồng thuận mạnh 💎”.
-- Lý do chi tiết: số trader, VIP⭐, PNL, Margin, xu hướng, độ tin cậy.
-- “Tín hiệu” 10–20 chữ, ngắn gọn, hành động rõ ràng.
+📈 PHÂN TÍCH TỔNG QUAN (bắt buộc, có TỔNG PNL & LÝ DO)
+- Trên toàn bộ dữ liệu (sau dedup ID):
+  • PNL_LONG = Σ PNL của ID Mode==LONG.
+  • PNL_SHORT = Σ PNL của ID Mode==SHORT.
+  • Bên đang lời hơn = bên có PNL cao hơn (nêu LÝ DO: ΔTB, số lệnh, ΣMargin, độ ổn định).
+  • “Traders vào hớ” = trader có PNL tổng âm HOẶC vào sai hướng chi phối của Symbol (LONG khi ΔTB<0 chi phối / SHORT khi ΔTB>0 chi phối). Nêu **danh sách**, **PNL_TỔNG nhóm**, và **lý do**.
+  • “Những trader thông minh nhất” = **danh sách** trader PNL dương, đúng xu hướng Symbol, vào sớm nhịp, Lev ≤ 60, Margin hợp lý. Nêu **PNL_TỔNG nhóm** và **lý do**.
 
-📈 Phân tích tổng quan (thêm bắt buộc)
-- Tổng kết **phe LONG vs SHORT**: bên nào đang lời nhiều hơn dựa trên PNL_TỔNG, ΔTB trung bình và số lệnh.  
-- Liệt kê **traders đang vào “hớ”**: trader vào sai hướng (LONG khi ΔTB<0 hoặc SHORT khi ΔTB>0).  
-- Liệt kê **traders “thông minh nhất”**: trader có PNL dương, đúng xu hướng, vào sớm trend, Lev hợp lý.  
-- Giải thích **vì sao** từng phe hoặc trader được đánh giá như vậy:  
-  • LONG thắng vì giá trung bình tăng và phần lớn PNL dương.  
-  • SHORT thắng vì giá giảm mạnh, các lệnh short có ΔTB âm nhưng PNL cao.  
-  • Trader “vào hớ” vì vào ngược xu hướng hoặc vào trễ khi trend đã yếu.  
-  • Trader “thông minh nhất” vì bắt đúng điểm đảo chiều, PNL cao, Lev hợp lý, giữ lệnh ổn định.
+🔢 FORMAT OUTPUT
 
-🧾 FORMAT OUTPUT
 ━━━━━━━━━━━━━━━━━━━
 🔥 <SYMBOL> — <LONG/SHORT>
 🕒 Thống kê: <THỜI_GIAN_THỐNG_KÊ>
 ⏱️ Trong <KHOẢNG>, có <SỐ_LỆNH> lệnh (🟩 <X> LONG · 🟥 <Y> SHORT)
-💰 <MARGIN_TỔNG>k USDT · 💵 <PNL_TỔNG>k PNL · ⚖️ TB: <LEV_TB>x  · 📈 <ΔTB>% Δ
+💰 <MARGIN_TỔNG> USDT · 💵 <PNL_TỔNG> PNL · ⚖️ <LEV_TB>x TB · 📈 <ΔTB>% Δ
 👥 Traders: <TênTrader[⭐] (#UID)>, …
-🔢 ID: <DANH_SÁCH_ORDER_ID>
-✅ Lý do: <Nhiều trader khác nhau cùng vào, VIP⭐, xu hướng, PNL dương, độ ổn định>
+🔢 ID: <ID1(LONG|SHORT)>, <ID2(LONG|SHORT)>, … (tối đa 30; dư “…")
+✅ Lý do: <nhiều trader, VIP⭐ nếu có, xu hướng, PNL dương & ổn định, chi tiết cụ thể>
 🔥 Độ nóng: <1–5>/5 | 🛡️ Safe / ⚠️ Risk / 🔥 Aggressive
 💡 Tín hiệu: <Gợi ý hành động 10–20 chữ>
 ━━━━━━━━━━━━━━━━━━━
 
 📊 Tổng kết cuối cùng:
-📈 Phe đang lời nhiều nhất: <LONG hoặc SHORT> · 💵 <PNL_TỔNG>k PNL — vì <lý do cụ thể: giá trung bình, PNL dương, trend mạnh, nhiều trader cùng hướng>  
-🤕 Traders vào “hớ”: <Tên (#UID)> — <Symbol> · 💵 <PNL_TỔNG>k PNL — <LONG/SHORT sai hướng> — vì <vào ngược trend, ΔTB bất lợi hoặc PNL âm>  
-💎 Trader vào “thông minh nhất”: <Tên (#UID)> — <Symbol> · 💵 <PNL_TỔNG>k PNL — <PNL cao, đúng hướng, vào sớm> — vì <bắt đúng trend, Margin hợp lý, Lev vừa phải>
+📈 Phe lời nhiều nhất: <LONG/SHORT> — PNL_TỔNG = <PNL_LONG hoặc PNL_SHORT> USDT — vì <ΔTB thuận chiều, số lệnh/ΣMargin áp đảo, PNL dương ổn định>.
+🤕 Traders vào “hớ”: <Danh sách Tên (#UID)> — PNL_TỔNG nhóm = <PNL> USDT — vì <vào ngược trend chi phối/ΔTB bất lợi/PNL âm>.
+💎 Những trader “thông minh nhất”: <Danh sách Tên (#UID)> — PNL_TỔNG nhóm = <PNL> USDT — vì <đúng xu hướng, vào sớm, Lev ≤60, Margin hợp lý, PNL dương ổn định>.
 ━━━━━━━━━━━━━━━━━━━
 
-🔒 Kiểm lỗi
-- Không trùng Order ID.
-- X+Y==SỐ_LỆNH.
-- Trader/UID/Order ID đúng Symbol & cửa sổ.
-- Symbol chỉ 1 trader hoặc PNL_TỔNG < 0 ⇒ loại bỏ.
-- Không bịa số; thiếu dữ liệu ⇒ bỏ Symbol.
-- Sắp xếp theo hot giảm dần, in tối đa 5 “kèo ngon”.
+🧪 ASSERT (kiểm lỗi cuối)
+- Danh sách ID là **duy nhất** và **mỗi ID hiển thị kèm (LONG|SHORT)** đúng theo bản ghi mới nhất.
+- X+Y == SỐ_LỆNH == số ID đã in.
+- Mọi Trader/UID/ID thuộc đúng Symbol & đúng cửa sổ.
+- Loại Symbol có: SỐ_LỆNH<3, chỉ 1 trader, hoặc PNL_TỔNG ≤ 0.
+- Không dùng dấu “~” ở con số.
+- In tối đa 5 Symbol theo hot ↓.
 
 
 Dữ liệu đầu vào: (CSV/bảng copy-trade)
