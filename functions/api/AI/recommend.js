@@ -65,7 +65,7 @@ Tạo “Top 5 Kèo Nóng trong vòng 3 hours” — ngắn gọn, CHÍNH XÁC, 
 - PNL_TỔNG = Σ PNL (USDT).
 - LEV_TB = avg(Lev) (làm tròn 0); ΔTB = avg(Δ % vs Open, 2 số).
 - Traders = danh sách duy nhất “Tên (#UID)” sort theo ΣMargin ↓ (tối đa 5). Gắn ⭐ nếu VIP (UID ∈ VIP_UIDS hoặc Followers ∈ top 10% của Symbol).
-- ID lệnh = danh sách Order ID **duy nhất**, sắp theo Open At ↓, **ghi kèm hướng**: `ID(MODE)` ví dụ `7361507…(LONG)`. Tối đa 30; dư ⇒ “…”.
+- ID lệnh = danh sách Order ID **duy nhất**, sắp theo Open At ↓, **ghi kèm hướng**: ID(MODE) ví dụ 7361507…(LONG). Tối đa 30; dư ⇒ “…”.
 - Nếu cùng một ID có nhiều dòng với Mode khác nhau ⇒ chọn Mode thực tế mới nhất theo Open At; loại dòng còn lại.
 - Xu hướng: LONG nếu X>Y; SHORT nếu Y>X; hoà ⇒ phe có ΣMargin lớn hơn.
 
