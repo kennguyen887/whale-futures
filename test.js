@@ -1,281 +1,263 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import crypto from 'crypto';
+#!/usr/bin/env node
+/**
+ * binance-orders.js
+ * Node.js script (no Cloudflare) — fetch Binance Copy Trade Lead Portfolio Order History
+ * - Fetch 3 pages, pageSize = 30, paginate by indexValue
+ * - Keep old input params: uids, limit, cursor, max, startTime, endTime
+ * - Normalize to your existing DTO
+ */
 
-// ---------- Config ----------
-const app = express();
-const PORT = Number(process.env.PORT || 8787);
+const API_BINANCE_ORDER_HISTORY =
+  "https://www.binance.com/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/order-history";
 
-app.use(cors({
-  origin: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'x-api-key']
-}));
-app.use(express.json({ limit: '1mb' }));
+const API_BINANCE_PORTFOLIO_LIST =
+  "https://www.binance.com/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/list";
 
-// ---------- Helpers ----------
-const corsHeaders = {
-  'content-type': 'application/json; charset=utf-8',
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET,POST,OPTIONS',
-  'access-control-allow-headers': 'Content-Type, Authorization, X-API-Key, x-api-key'
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  Accept: "application/json,text/plain,*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Content-Type": "application/json",
 };
-function jsonRes(res, status, obj) { return res.status(status).set(corsHeaders).json(obj); }
 
-function num(x, def = 0) {
-  const n = typeof x === 'number' ? x : Number(String(x ?? '').replace(/,/g, ''));
-  return Number.isFinite(n) ? n : def;
+// Mặc định: nhận luôn 1 portfolioId như bạn đang demo
+const DEFAULT_UIDS = "4438679961865098497";
+
+// ---------- utils ----------
+function n(x) {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : 0;
 }
-async function safeJson(res) { try { return await res.json(); } catch { return await res.text(); } }
-
-// Build requestParamString: sort keys, URL-encode values, join by '&' (khớp demo đã chạy OK)
-function buildRequestParamString(params = {}) {
-  const entries = Object.entries(params)
-    .filter(([, v]) => v !== undefined && v !== null) // null không ký
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${encodeURIComponent(String(v)).replace(/\+/g, '%20')}`);
-  return entries.join('&');
+function pair(s = "") {
+  return String(s).replace("_", "");
 }
-
-// HMAC SHA256 signature: payload = accessKey + reqTime + requestParamString
-function signContract({ accessKey, secretKey, reqTime, requestParamString }) {
-  const payload = `${accessKey}${reqTime}${requestParamString || ''}`;
-  return crypto.createHmac('sha256', secretKey).update(payload).digest('hex');
+function modeFromSide(side) {
+  const s = String(side || "").toUpperCase();
+  if (s === "BUY") return "long";
+  if (s === "SELL") return "short";
+  return "unknown";
 }
-
-// Gọi private GET cho MEXC Contract theo chuẩn đã xác thực
-async function mexcPrivateGet(base, path, params, { accessKey, secretKey, debugMode }) {
-  const reqTime = Date.now().toString();
-  const requestParamString = buildRequestParamString(params || {});
-  const signature = signContract({ accessKey, secretKey, reqTime, requestParamString });
-
-  const url = `${base}${path}${requestParamString ? '?' + requestParamString : ''}`;
-  const headers = {
-    'ApiKey': accessKey,
-    'Request-Time': reqTime,
-    'Signature': signature,
-    'Content-Type': 'application/json'
-  };
-
-  const res = await fetch(url, { method: 'GET', headers }).catch(() => null);
-  const data = res ? await safeJson(res) : { success: false, message: 'network_error' };
-
-  const dbg = debugMode ? {
-    url,
-    status: res?.status || 0,
-    headersSent: { ...headers, ApiKey: '***', Signature: String(signature).slice(0, 16) + '…' },
-    requestParamString,
-    reqTime
-  } : undefined;
-
-  return { ok: !!res?.ok, data, debug: dbg };
+function tsVNT(t) {
+  return t
+    ? new Date(t)
+        .toLocaleString("en-GB", {
+          timeZone: "Asia/Ho_Chi_Minh",
+          hour12: false,
+        })
+        .replace(",", "")
+    : "";
 }
+function lev(o) {
+  // Không có leverage trong sample → fallback 1
+  return n(o?.raw?.leverage) || 1;
+}
+function mUSDT(p, a, l, m) {
+  const M = n(m);
+  if (M > 0) return M;
+  const not = n(p) * n(a);
+  return (n(l) || 1) > 0 ? not / (l || 1) : 0;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function mergeMexcData(store, path, data) {
-  const d = data?.data ?? data?.result ?? data ?? [];
-  if (path.includes('/position/')) {
-    const arr = Array.isArray(d) ? d : (Array.isArray(d?.positions) ? d.positions : []);
-    for (const it of arr) store.positions.push(it);
-  } else if (path.includes('/order/')) {
-    const arr = Array.isArray(d) ? d : (Array.isArray(d?.orders) ? d.orders : []);
-    for (const it of arr) store.openOrders.push(it);
+// ---------- Binance helpers ----------
+async function fetchPortfolioIdsByLeadUid(leadUid) {
+  try {
+    const res = await fetch(API_BINANCE_PORTFOLIO_LIST, {
+      method: "POST",
+      headers: BROWSER_HEADERS,
+      body: JSON.stringify({ leadUid: String(leadUid) }),
+    });
+    if (!res.ok) return [];
+    const json = await res.json().catch(() => null);
+    const list = json?.data?.list || json?.data || [];
+    return list
+      .map((it) => String(it?.portfolioId || ""))
+      .filter((s) => !!s && s.length > 0);
+  } catch {
+    return [];
   }
 }
 
-// ---------- Route ----------
-app.options('/api/AI/recommend-live', (req, res) => res.status(204).set(corsHeaders).send());
+async function fetchFirst3PagesOrderHistory(portfolioId, startTime, endTime) {
+  const pageSize = 30;
+  let indexValue = undefined;
+  const all = [];
 
-app.post('/api/AI/recommend-live', async (req, res) => {
+  for (let page = 1; page <= 3; page++) {
+    await sleep(120 + Math.floor(Math.random() * 80));
+
+    const payload = {
+      portfolioId: String(portfolioId),
+      startTime: n(startTime),
+      endTime: n(endTime),
+      pageSize,
+    };
+    if (indexValue) payload.indexValue = String(indexValue);
+
+    const res = await fetch(API_BINANCE_ORDER_HISTORY, {
+      method: "POST",
+      headers: BROWSER_HEADERS,
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) break;
+
+    const json = await res.json().catch(() => null);
+    const ok = json?.success === true && json?.code === "000000";
+    const data = ok ? json?.data : null;
+    const list = Array.isArray(data?.list) ? data.list : [];
+    for (const item of list) all.push(item);
+
+    const nextIndex = data?.indexValue || null;
+    if (!nextIndex || list.length === 0) break;
+    indexValue = nextIndex;
+  }
+
+  return all;
+}
+
+// ---------- CLI ----------
+function parseArgs(argv) {
+  const args = {};
+  for (const a of argv.slice(2)) {
+    if (a.startsWith("--")) {
+      const [k, v] = a.slice(2).split("=");
+      args[k] = v === undefined ? true : v;
+    }
+  }
+  return args;
+}
+
+async function main() {
   try {
-    // --- Security ---
-    const REQUIRED_KEY = process.env.INTERNAL_API_KEY || '';
-    if (REQUIRED_KEY) {
-      const clientKey = req.header('x-api-key') || '';
-      if (clientKey !== REQUIRED_KEY) {
-        return jsonRes(res, 401, { success: false, error: 'Unauthorized: invalid x-api-key.' });
+    const args = parseArgs(process.argv);
+
+    // input params (giữ tên cũ)
+    const uids = String(args.uids || DEFAULT_UIDS)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const limit = n(args.limit || 50); // không dùng cho Binance, giữ để không breaking
+    const total = uids.length;
+    const start = Math.max(0, n(args.cursor || 0));
+    const maxPerCall = Math.max(1, Math.min(35, n(args.max || 35)));
+    const end = Math.min(total, start + maxPerCall);
+
+    const now = Date.now();
+    const defaultStart = now - 7 * 24 * 60 * 60 * 1000;
+    const startTime = n(args.startTime || defaultStart);
+    const endTime = n(args.endTime || now);
+
+    const all = [];
+
+    for (let i = start; i < end; i++) {
+      const uid = uids[i];
+      await sleep(80 + Math.floor(Math.random() * 60));
+
+      let portfolioIds = [];
+      if (String(uid).length > 15) {
+        // đã là portfolioId
+        portfolioIds = [String(uid)];
+      } else {
+        portfolioIds = await fetchPortfolioIdsByLeadUid(uid);
+        if (!portfolioIds.length) continue;
+      }
+
+      for (const pid of portfolioIds) {
+        const rows = await fetchFirst3PagesOrderHistory(pid, startTime, endTime);
+        for (const r of rows) {
+          all.push({ ...r, _portfolioId: pid, _leadUid: uid });
+        }
       }
     }
 
-    // --- OpenAI config ---
-    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-    if (!OPENAI_API_KEY) {
-      return jsonRes(res, 500, { success: false, error: 'Server misconfig: OPENAI_API_KEY not set.' });
-    }
-    const OPENAI_BASE = (process.env.OPENAI_BASE || 'https://api.openai.com').replace(/\/+$/, '');
-    const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    // de-dup
+    const keyOf = (o) =>
+      [
+        o?._portfolioId || "",
+        o?.orderTime || "",
+        o?.symbol || "",
+        o?.avgPrice || "",
+        o?.executedQty || "",
+        o?.side || "",
+      ].join("|");
 
-    // --- MEXC keys ---
-    const ACCESS_KEY = process.env.MEXC_ACCESS_KEY;
-    const SECRET_KEY = process.env.MEXC_SECRET_KEY;
-    if (!ACCESS_KEY || !SECRET_KEY) {
-      return jsonRes(res, 500, { success: false, error: 'Server misconfig: MEXC keys not set.' });
-    }
-
-    // --- Params & flags ---
-    const lang = String(req.query.lang ?? 'vi').toLowerCase();
-    const debugMode = String(req.query.debug ?? '').toLowerCase() === '1' || process.env.DEBUG_MEXC === '1';
-    const FORCE_SYMBOL = process.env.MEXC_SYMBOL || '';               // optional: ép symbol qua env
-    const symbol = String(req.query.symbol ?? FORCE_SYMBOL ?? '');    // cũng cho phép ?symbol=BTC_USDT
-    const customPrompt = String(req.body?.prompt ?? '').trim();
-
-    // --- Fetch live (positions + open orders) via proven signer ---
-    const BASE = 'https://contract.mexc.com';
-    const endpoints = [
-      { path: '/api/v1/private/position/open_positions', params: symbol ? { symbol } : {} },
-      { path: '/api/v1/private/order/open_orders',       params: symbol ? { symbol } : {} }
-    ];
-
-    const live = { positions: [], openOrders: [], raw: [], debug: [] };
-    for (const ep of endpoints) {
-      const r = await mexcPrivateGet(BASE, ep.path, ep.params, {
-        accessKey: ACCESS_KEY, secretKey: SECRET_KEY, debugMode
-      });
-      live.raw.push({ path: ep.path, status: r.debug?.status ?? 0, data: r.data });
-      if (debugMode && r.debug) live.debug.push({ ...r.debug, path: ep.path });
-      if (r.data?.success) mergeMexcData(live, ep.path, r.data);
+    const byKey = new Map();
+    for (const o of all) {
+      const k = keyOf(o);
+      const prev = byKey.get(k);
+      const t = n(o?.orderUpdateTime || o?.orderTime || 0);
+      const tp = n(prev?.orderUpdateTime || prev?.orderTime || 0);
+      if (!prev || t > tp) byKey.set(k, o);
     }
 
-    console.log(
-      `Fetched ${live.positions.length} positions and ${live.openOrders.length} open orders from MEXC`,
-      live.raw
-    );
+    // normalize DTO cũ
+    const data = Array.from(byKey.values())
+      .map((o) => {
+        const L = lev(o);
+        const P = n(o?.avgPrice);
+        const A = n(o?.executedQty);
+        const notional = P * A;
+        const M = mUSDT(P, A, L, 0);
 
-    // --- Normalize → CSV for AI ---
-    const rows = [];
-    const tz = 'Asia/Ho_Chi_Minh';
+        return {
+          id: `${o?.symbol || ""}-${o?.orderTime || ""}-${o?.side || ""}`,
+          trader: "",
+          traderUid: String(o?._leadUid || ""),
+          symbol: pair(o?.symbol || ""),
+          mode: modeFromSide(o?.side),
+          lev: L,
+          marginMode: "Unknown",
+          amount: A,
+          openPrice: P,
+          margin: M,
+          notional,
+          followers: undefined,
+          openAt: n(o?.orderTime || 0),
+          openAtStr: tsVNT(o?.orderTime || 0),
+          marginPct: notional > 0 ? (M / notional) * 100 : 0,
+          raw: o,
+        };
+      })
+      .sort((a, b) => b.openAt - a.openAt);
 
-    // Positions
-    for (const p of live.positions) {
-      const symbol = p.symbol || p.currency || p.contract || p.instrumentId || '';
-      const sideRaw = p.side || p.positionSide || p.direction || (p.positionType === 1 ? 'LONG' : p.positionType === 2 ? 'SHORT' : '');
-      const side = `${sideRaw}`.toUpperCase().includes('SHORT') ? 'SHORT' : 'LONG';
-      const lev = p.leverage || p.lever || p.leverRate || p.marginLeverage || 0;
-      const marginMode = (p.marginMode || p.margin_type || p.isIsolated ? 'Isolated' : 'Cross');
-      const entry = num(p.avgEntryPrice ?? p.openPrice ?? p.openAvgPrice ?? p.holdAvgPrice ?? p.entryPrice);
-      const mark  = num(p.markPrice ?? p.lastPrice ?? p.currentPrice ?? p.fairPrice);
-      const qty   = num(p.positionVolume ?? p.size ?? p.holdVol ?? p.quantity ?? p.positionAmt);
-      const notional = Math.abs(mark * qty);
-      const pnl   = num(p.unrealizedPnl ?? p.pnl ?? p.unrealizedProfit);
-      const roiPct = notional > 0 ? (pnl / (notional / (lev || 1))) * 100 : 0;
-      const deltaPct = entry ? ((mark - entry) / entry) * 100 : 0;
-      const openedAt = p.openTime || p.createTime || p.updateTime || Date.now();
+    const nextCursor = end < total ? String(end) : null;
 
-      rows.push({
-        'Trader': p.uid || p.traderUid || p.accountId || '',
-        'Symbol': symbol,
-        'Mode': side,
-        'Lev': lev,
-        'Margin Mode': marginMode,
-        'PNL (USDT)': pnl,
-        'ROI %': roiPct,
-        'Open Price': entry,
-        'Market Price': mark,
-        'Δ % vs Open': deltaPct,
-        'Amount': qty,
-        'Margin (USDT)': notional / (lev || 1),
-        'Notional (USDT)': notional,
-        'Open At (VNT)': new Date(openedAt).toLocaleString('en-GB', { timeZone: tz, hour12: false }).replace(',', ''),
-        'Margin %': '',
-        'Followers': '',
-        'UID': p.uid || ''
-      });
-    }
-
-    // Open Orders
-    for (const o of live.openOrders) {
-        console.log('=--------Open order:', o);
-      const symbol = o.symbol || o.currency || o.contract || '';
-      const sideRaw = o.side || o.positionSide || o.direction || o.orderSide || '';
-      const isLong = `${sideRaw}`.toUpperCase().includes('BUY');
-      const side = isLong ? 'LONG' : 'SHORT';
-      const lev = o.leverage || o.lever || o.leverRate || 0;
-      const marginMode = (o.marginMode || o.margin_type || o.isIsolated ? 'Isolated' : 'Cross');
-      const price = num(o.price ?? o.triggerPrice ?? o.orderPrice);
-      const qty   = num(o.vol ?? o.quantity ?? o.size);
-      const openedAt = o.createTime || o.updateTime || Date.now();
-
-      rows.push({
-        'Trader': o.uid || o.traderUid || '',
-        'Symbol': symbol,
-        'Mode': side,
-        'Lev': lev,
-        'Margin Mode': marginMode,
-        'PNL (USDT)': 0,
-        'ROI %': 0,
-        'Open Price': price,
-        'Market Price': price,
-        'Δ % vs Open': 0,
-        'Amount': qty,
-        'Margin (USDT)': '',
-        'Notional (USDT)': '',
-        'Open At (VNT)': new Date(openedAt).toLocaleString('en-GB', { timeZone: tz, hour12: false }).replace(',', ''),
-        'Margin %': '',
-        'Followers': '',
-        'UID': o.uid || ''
-      });
-    }
-
-    const headers = [
-      'Trader','Symbol','Mode','Lev','Margin Mode','PNL (USDT)','ROI %','Open Price',
-      'Market Price','Δ % vs Open','Amount','Margin (USDT)','Notional (USDT)','Open At (VNT)','Margin %','Followers','UID'
-    ];
-    const csv = [
-      headers.join(','),
-      ...rows.map(r => headers.map(h => String(r[h] ?? '').replace(/,/g, '')).join(','))
-    ].join('\n');
-console.log(`---------------Prepared CSV with ${rows.length} rows for AI.`, csv);
-    // --- Prompt ---
-    const DEFAULT_PROMPT = `
-Bạn là chuyên gia trader kiêm risk-manager, tư vấn những lệnh tôi đang có. Hãy:
-1) Đọc lệnh Futures (vị thế đang mở + lệnh đang chờ khớp) bên dưới.
-2) Chuẩn hoá số, parse thời gian Asia/Ho_Chi_Minh. Ưu tiên lệnh mở 6–12h gần nhất.
-4) Phân loại kèo: 🔥 Ưu tiên | 🛡️ An toàn | ⚠️ Rủi ro | 📈 Đang trend.
-5) Tư vấn tối ưu hoá lợi nhuận & quản trị rủi ro
-6) Quản trị rủi ro (cứng): Lev tối đa như trên; ≤3 kèo cùng lớp tài sản; risk per trade ≤1% tài khoản; tổng risk ≤5%.
-7) Thêm cảnh báo ⚠️ nếu có
-8) Ngôn ngữ: ${lang === 'vi' ? 'Tiếng Việt' : 'User language'}; xuất bảng: [Nhóm] | Symbol | Bias | Market | Entry | Lev | Term | Risk | TP | SL | R:R | Reason.
-9) Format các lệnh bên dưới dạng table Markdown có icon, ngắn gọn, dễ đọc. Dữ liệu rõ ràng.
-lệnh Futures:
-${csv || '<EMPTY>'}
-`.trim();
-
-    const finalPrompt = customPrompt || DEFAULT_PROMPT;
-
-    // --- OpenAI call ---
-    const aiReq = { model: OPENAI_MODEL, temperature: 0.2, messages: [{ role: 'user', content: finalPrompt }] };
-    const aiResp = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(aiReq)
-    });
-
-    if (!aiResp.ok) {
-      const errText = await aiResp.text();
-      return jsonRes(res, aiResp.status, {
-        success: false,
-        error: `OpenAI error: ${errText}`,
-        debug: live.raw.slice(-4)
-      });
-    }
-
-    const data = await aiResp.json();
-    const content = data?.choices?.[0]?.message?.content?.trim() || '';
-
-    return jsonRes(res, 200, {
+    const output = {
       success: true,
-      model: OPENAI_MODEL,
-      resultMarkdown: content,
-      positionsCount: live.positions.length,
-      openOrdersCount: live.openOrders.length,
-      debug: (debugMode ? { requests: live.debug, raw: live.raw.slice(-4) } : undefined)
-    });
-  } catch (e) {
-    return jsonRes(res, 500, { success: false, error: String(e?.message || e) });
-  }
-});
+      page: { start, end, total, maxPerCall, nextCursor, limitUsed: limit },
+      meta: {
+        source: "binance.copy-trade.lead-portfolio.order-history",
+        pagesPerPortfolio: 3,
+        pageSize: 30,
+        startTime,
+        endTime,
+      },
+      data,
+    };
 
-// ---------- Start ----------
-app.listen(PORT, () => {
-  console.log(`recommend-live node server listening on http://localhost:${PORT}`);
-});
+    // In ra stdout (bạn có thể redirect > file.json nếu muốn)
+    console.log(JSON.stringify(output));
+    process.exit(0);
+  } catch (err) {
+    console.error(JSON.stringify({ success: false, error: String(err?.message || err) }));
+    process.exit(1);
+  }
+}
+
+main();
+
+/**
+ * Cách chạy:
+ *   node binance-orders.js \
+ *     --uids=4438679961865098497 \
+ *     --cursor=0 \
+ *     --max=35 \
+ *     --limit=50 \
+ *     --startTime=1760806800000 \
+ *     --endTime=1761411599999
+ *
+ * Ghi ra file:
+ *   node binance-orders.js --uids=4438679961865098497 > out.json
+ */
