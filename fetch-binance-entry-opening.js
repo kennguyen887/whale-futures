@@ -1,15 +1,14 @@
 // positive-pnl-once.js
 // Node >= 18
 //
-// ✅ Mở = totalPnl === 0 (theo payload mẫu)
-// ✅ side = BUY/SELL ; positionSide = LONG/SHORT (đúng field)
-// ✅ Giá hiện tại từ MEXC (futures -> spot)
-// ✅ PNL > 0 → ghi CSV
-// ✅ deltaPercent theo hướng vị thế (LONG/SHORT)
+// ✅ Lấy lệnh đang mở: totalPnl === 0
+// ✅ Loại lệnh đã đóng theo nhóm orderTime: nếu có item cùng orderTime có totalPnl != 0 → skip cả nhóm
+// ✅ Giá hiện tại từ MEXC (futures -> spot); PNL (USDT) theo LONG/SHORT (không cần margin)
 // ✅ "At VNT" (1h20 ago, 3d2 ago)
 // ✅ Số: chỉ 4 chữ số thập phân
-// ✅ Sort CSV: mới → cũ
-// ✅ Log chi tiết tiến trình
+// ✅ Sort CSV: mới → cũ; xóa file trước khi chạy; log chi tiết
+// ✅ copyCount lấy đúng từ API trader list (nhiều field fallback)
+// ✅ PNL hiển thị kèm icon ngay sau giá trị (không thêm cột mới)
 
 import { setTimeout as sleep } from "node:timers/promises";
 import { argv } from "node:process";
@@ -84,6 +83,15 @@ function pctDeltaSideAware(open, mp, positionSide) {
   return null;
 }
 
+// Icon theo mức PNL
+const iconForPNL = (pnl) => {
+  if (pnl > 7000) return "💎";
+  if (pnl > 3000) return "💰";
+  if (pnl > 2000) return "🔥";
+  if (pnl > 1000) return "🟢";
+  return "";
+};
+
 // ---------- CSV ----------
 function csvEscape(v) {
   if (v == null) return "";
@@ -93,32 +101,35 @@ function csvEscape(v) {
 async function writeCsvHeader(path) {
   const header = [
     "At VNT","orderTime","symbol","side","positionSide","qty","avgPrice","marketPrice",
-    "pnl","deltaPercent","notional","trader","uid","roi_percent","copyCount",
+    "pnl","deltaPercent","notional","trader","uid","copyCount",
     "portfolioId","orderId"
   ].join(",") + "\n";
   await writeFile(path, header, "utf8");
 }
 async function appendCsv(path, rows) {
   const sorted = [...rows].sort((a,b) => Number(b.orderTime) - Number(a.orderTime));
-  const lines = sorted.map(r => [
-    csvEscape(r.atVNT),
-    csvEscape(r.orderTime),
-    csvEscape(r.symbol),
-    csvEscape(r.side),
-    csvEscape(r.positionSide),
-    csvEscape(toFixed4(r.qty)),
-    csvEscape(toFixed4(r.avgPrice)),
-    csvEscape(toFixed4(r.marketPrice)),
-    csvEscape(toFixed4(r.pnl)),
-    csvEscape(toFixed4(r.deltaPercent)),
-    csvEscape(toFixed4(r.notional)),
-    csvEscape(r.trader),
-    csvEscape(r.uid),
-    csvEscape(toFixed4(r.roi_percent)),
-    csvEscape(r.copyCount),
-    csvEscape(r.portfolioId),
-    csvEscape(r.orderId)
-  ].join(",")).join("\n") + "\n";
+  const lines = sorted.map(r => {
+    // PNL field = "123.4567 <icon>"
+    const pnlWithIcon = `${toFixed4(r.pnl)}${r.icon ? ` ${r.icon}` : ""}`;
+    return [
+      csvEscape(r.atVNT),
+      csvEscape(r.orderTime),
+      csvEscape(r.symbol),
+      csvEscape(r.side),
+      csvEscape(r.positionSide),
+      csvEscape(toFixed4(r.qty)),
+      csvEscape(toFixed4(r.avgPrice)),
+      csvEscape(toFixed4(r.marketPrice)),
+      csvEscape(pnlWithIcon), // ⟵ cùng cột PNL, kèm icon
+      csvEscape(toFixed4(r.deltaPercent)),
+      csvEscape(toFixed4(r.notional)),
+      csvEscape(r.trader),
+      csvEscape(r.uid),
+      csvEscape(r.copyCount),
+      csvEscape(r.portfolioId),
+      csvEscape(r.orderId)
+    ].join(",");
+  }).join("\n") + "\n";
   await appendFile(path, lines, "utf8");
 }
 
@@ -182,18 +193,27 @@ async function fetchTraders(limit = 50) {
     portfolioId: t?.portfolioId || t?.leadPortfolioId || t?.id,
     nickname: t?.nickName || t?.nickname || "",
     uid: t?.uid || t?.userId || "",
-    roi: t?.roi ?? "",
-    copyCount: t?.copyUserCount ?? t?.copyCount ?? t?.copiers ?? "",
+    // copyCount: lấy từ nhiều field fallback
+    copyCount:
+      t?.copyUserCount ??
+      t?.copyCount ??
+      t?.copiers ??
+      t?.copierCount ??
+      t?.userCopyCount ??
+      t?.followerCount ??
+      0,
   })).filter(x => x.portfolioId);
-  return uniqBy(traders, x => x.portfolioId).slice(0, limit);
+  const uniq = uniqBy(traders, x => x.portfolioId).slice(0, limit);
+  console.log(`[init] fetched ${uniq.length} traders, sample copyCount=${uniq[0]?.copyCount ?? "?"}`);
+  return uniq;
 }
 
 // ---------- normalize ----------
 function normalizeHistory(o, ctx) {
   const symbol = (o.symbol || "").toUpperCase();
-  // side: BUY/SELL
+
+  // side: BUY/SELL ; positionSide: LONG/SHORT
   const side = String(o.side || "").toUpperCase();
-  // positionSide: LONG/SHORT (đúng field); fallback theo side nếu thiếu
   let positionSide = String(o.positionSide || "").toUpperCase();
   if (!positionSide) {
     if (side === "BUY") positionSide = "LONG";
@@ -205,19 +225,18 @@ function normalizeHistory(o, ctx) {
   );
   const avgPrice = Number(o.avgPrice ?? o.price ?? o.entryPrice ?? o.openPrice ?? 0);
   const orderTime = o.orderTime ?? o.orderUpdateTime ?? o.openTime ?? o.createTime ?? o.time ?? Date.now();
-  const orderId = o.orderId ?? o.id ?? `${symbol}-${orderTime}`; // fallback để không rỗng
-  const totalPnl = Number(o.totalPnl ?? 0); // dùng để xác định opening
+  const orderId = o.orderId ?? o.id ?? `${symbol}-${orderTime}`;
+  const totalPnl = Number(o.totalPnl ?? 0); // payload thực tế
 
   return {
     portfolioId: ctx.portfolioId,
     nickname: ctx.nickname,
     uid: ctx.uid,
-    roi: ctx.roi ?? "",
-    copyCount: ctx.copyCount ?? "",
+    copyCount: ctx.copyCount ?? 0,
     symbol, side, positionSide,
     executedQty, avgPrice,
     orderTime, orderId,
-    totalPnl, // 0 => đang mở
+    totalPnl,
   };
 }
 
@@ -236,7 +255,7 @@ function normalizeHistory(o, ctx) {
   console.log(`[init] price map size=${priceMap.size}`);
 
   const rows = [];
-  let totalOrders = 0;
+  let totalOrders = 0, skipClosed = 0, skipNoPrice = 0, skipNonPositive = 0, saved = 0;
 
   for (const tr of traders) {
     const now = Date.now();
@@ -261,10 +280,24 @@ function normalizeHistory(o, ctx) {
     console.log(`[order-history] pf=${tr.portfolioId} items=${list.length}`);
     totalOrders += list.length;
 
+    // Nhóm orderTime đã đóng (có ít nhất một item totalPnl != 0)
+    const closedTimes = new Set(
+      list
+        .filter(x => isFinite(Number(x?.totalPnl)) && Number(x.totalPnl) !== 0)
+        .map(x => x?.orderTime)
+        .filter(Boolean)
+    );
+    if (closedTimes.size) {
+      console.log(`[closed] pf=${tr.portfolioId} closedTimes count=${closedTimes.size}`);
+    }
+
     for (const raw of list) {
       const e = normalizeHistory(raw, tr);
 
-      // chỉ lấy lệnh đang mở theo yêu cầu: totalPnl === 0
+      // loại nhóm đã đóng theo cùng orderTime
+      if (closedTimes.has(e.orderTime)) { skipClosed++; continue; }
+
+      // chỉ lấy đang mở
       if (e.totalPnl !== 0) continue;
 
       // dữ liệu tối thiểu
@@ -276,16 +309,17 @@ function normalizeHistory(o, ctx) {
       // giá hiện tại từ MEXC
       const futKey = toFuturesKey(e.symbol);
       const mp = priceMap.get(futKey) ?? priceMap.get(e.symbol);
-      if (!(isFinite(mp) && mp > 0)) { console.log(`[skip noPrice] ${e.symbol} oid=${e.orderId}`); continue; }
+      if (!(isFinite(mp) && mp > 0)) { skipNoPrice++; console.log(`[skip noPrice] ${e.symbol} oid=${e.orderId}`); continue; }
 
-      // tính PNL và delta theo hướng vị thế
+      // tính PNL & delta theo hướng vị thế
       const pnl = computePnl(e.avgPrice, mp, e.executedQty, e.positionSide);
       const delta = pctDeltaSideAware(e.avgPrice, mp, e.positionSide);
       const notional = e.avgPrice * e.executedQty;
+      const icon = iconForPNL(pnl);
 
-      console.log(`[process] ${e.symbol} side=${e.side} pos=${e.positionSide} qty=${toFixed4(e.executedQty)} open=${toFixed4(e.avgPrice)} mexc=${toFixed4(mp)} -> pnl=${toFixed4(pnl)} delta%=${toFixed4(delta)}`);
+      console.log(`[process] ${e.symbol} side=${e.side} pos=${e.positionSide} qty=${toFixed4(e.executedQty)} open=${toFixed4(e.avgPrice)} mexc=${toFixed4(mp)} -> pnl=${toFixed4(pnl)} ${icon} delta%=${toFixed4(delta)}`);
 
-      if (!(pnl > 0)) { console.log(`[skip <=0] ${e.symbol} oid=${e.orderId}`); continue; }
+      if (!(pnl > 0)) { skipNonPositive++; console.log(`[skip <=0] ${e.symbol} oid=${e.orderId}`); continue; }
 
       rows.push({
         atVNT: formatAgoVNT(e.orderTime),
@@ -297,19 +331,20 @@ function normalizeHistory(o, ctx) {
         avgPrice: e.avgPrice,
         marketPrice: mp,
         pnl,
+        icon, // sẽ gắn vào chuỗi PNL khi ghi CSV
         deltaPercent: delta,
         notional,
         trader: abbreviateName(tr.nickname),
         uid: tr.uid,
-        roi_percent: tr.roi,
         copyCount: tr.copyCount,
         portfolioId: e.portfolioId,
         orderId: e.orderId,
       });
-      console.log(`[CSV +] ${e.symbol} oid=${e.orderId} pnl=${toFixed4(pnl)}`);
+      saved++;
+      console.log(`[CSV +] ${e.symbol} oid=${e.orderId} pnl=${toFixed4(pnl)} ${icon}`);
     }
   }
 
   await appendCsv(OUT_FILE, rows);
-  console.log(`[done] totalOrders=${totalOrders} saved=${rows.length} file=${OUT_FILE}`);
+  console.log(`[done] totalOrders=${totalOrders} saved=${saved} | skip: closed=${skipClosed} noPrice=${skipNoPrice} nonPositive=${skipNonPositive} | file=${OUT_FILE}`);
 })();
